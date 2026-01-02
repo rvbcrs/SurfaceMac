@@ -1,26 +1,95 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useWizard } from '../App';
 
 const PostInstallStep: React.FC = () => {
   const { prevStep, macosVersion } = useWizard();
-  const [isCopying, setIsCopying] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const [partitions, setPartitions] = useState<EFIPartition[]>([]);
+  const [sourceId, setSourceId] = useState<string>('');
+  const [destId, setDestId] = useState<string>('');
+  
+  const [currentAction, setCurrentAction] = useState<string>('');
   const [copyComplete, setCopyComplete] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [heliportInstalled, setHeliportInstalled] = useState(false);
 
+  useEffect(() => {
+    scanPartitions();
+  }, []);
+
+  const scanPartitions = async () => {
+    setIsScanning(true);
+    setError(null);
+    try {
+      if (window.electronAPI) {
+        const parts = await window.electronAPI.listEFIPartitions();
+        setPartitions(parts);
+        
+        // Auto-select likely candidates if not already set
+        if (!sourceId || !destId) {
+          const usb = parts.find(p => p.diskType === 'external');
+          const internal = parts.find(p => p.diskType === 'internal');
+          if (usb && !sourceId) setSourceId(usb.id);
+          if (internal && !destId) setDestId(internal.id);
+        }
+      } else {
+        // Mock data for browser dev
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const mockParts: EFIPartition[] = [
+          { id: 'disk1s1', diskId: 'disk1', diskType: 'external', diskName: 'USB Installer', label: 'EFI', mounted: false, mountPoint: null },
+          { id: 'disk0s1', diskId: 'disk0', diskType: 'internal', diskName: 'Macintosh HD', label: 'EFI', mounted: false, mountPoint: null }
+        ];
+        setPartitions(mockParts);
+        setSourceId('disk1s1');
+        setDestId('disk0s1');
+      }
+    } catch (err) {
+      setError('Failed to list partitions.');
+      console.error(err);
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
   const copyEfiToSsd = async (): Promise<void> => {
-    setIsCopying(true);
+    if (!sourceId || !destId) return;
     
-    // Simulate EFI copy
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    setCurrentAction('Starting...');
+    setError(null);
     
-    // In real implementation:
-    // if (window.electronAPI) {
-    //   await window.electronAPI.mountEFI('/dev/disk0'); // SSD
-    //   await window.electronAPI.copyEFI('/Volumes/EFI_USB', '/Volumes/EFI_SSD');
-    // }
-    
-    setIsCopying(false);
-    setCopyComplete(true);
+    try {
+      if (window.electronAPI) {
+        // 1. Mount Source
+        setCurrentAction(`Mounting Source (${sourceId})...`);
+        const sourcePath = await window.electronAPI.mountEFI(sourceId);
+        
+        // 2. Mount Dest
+        setCurrentAction(`Mounting Destination (${destId})...`);
+        const destPath = await window.electronAPI.mountEFI(destId);
+        
+        // 3. Copy
+        setCurrentAction('Copying EFI folder...');
+        await window.electronAPI.copyEFI(sourcePath, destPath);
+        
+        // 4. Unmount (optional, maybe keep mounted for user inspection?)
+        // await window.electronAPI.unmountEFI(sourceId);
+        // await window.electronAPI.unmountEFI(destId);
+      } else {
+        // Simulate
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        setCurrentAction('Mounting...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        setCurrentAction('Copying...');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
+      setCopyComplete(true);
+      setCurrentAction('');
+    } catch (err) {
+      setError('Failed to copy EFI. Check logs.');
+      console.error(err);
+      setCurrentAction('');
+    }
   };
 
   const installHeliport = async (): Promise<void> => {
@@ -41,7 +110,6 @@ const PostInstallStep: React.FC = () => {
       </header>
 
       <div className="content-body fade-in">
-        {/* Step 1: Copy EFI */}
         <div className="card" style={{ marginBottom: 'var(--space-lg)' }}>
           <div className="card-header">
             <div className="card-icon" style={{ background: copyComplete ? 'var(--color-accent-green)' : 'var(--gradient-primary)' }}>
@@ -51,29 +119,91 @@ const PostInstallStep: React.FC = () => {
               <div className="card-title">Copy EFI to Internal Drive</div>
             </div>
           </div>
+          
           <div className="card-description">
-            This copies the OpenCore bootloader from your USB to your SSD's EFI partition,
-            allowing your Surface to boot macOS without the USB drive.
+            Copy the OpenCore bootloader from your USB to your SSD's EFI partition.
           </div>
           
           {!copyComplete && (
-            <div style={{ marginTop: 'var(--space-lg)' }}>
-              {isCopying ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
-                  <div className="spinner" />
-                  <span>Mounting EFI partitions and copying files...</span>
-                </div>
-              ) : (
-                <button className="btn btn-primary" onClick={copyEfiToSsd}>
-                  Copy EFI to SSD
+            <div style={{ marginTop: 'var(--space-md)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-sm)' }}>
+                <span style={{ fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>Detected Partitions:</span>
+                <button className="btn btn-ghost btn-sm" onClick={scanPartitions} disabled={isScanning || !!currentAction}>
+                  {isScanning ? 'Scanning...' : '🔄 Refresh'}
                 </button>
+              </div>
+
+              {partitions.length === 0 && !isScanning && (
+                <div className="alert alert-warning">No EFI partitions found. Insert USB drive.</div>
               )}
+
+              {partitions.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-md)' }}>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: 'var(--space-xs)', fontSize: 'var(--font-size-sm)' }}>
+                      Source (USB)
+                    </label>
+                    <select 
+                      className="form-select" 
+                      value={sourceId} 
+                      onChange={(e) => setSourceId(e.target.value)}
+                      disabled={!!currentAction}
+                      style={{ width: '100%', padding: '8px', borderRadius: '4px', background: 'var(--color-bg-elevated)', color: 'white', border: '1px solid var(--color-border)' }}
+                    >
+                      <option value="">Select Source...</option>
+                      {partitions.map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.diskName} ({p.id}) - {p.diskType}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: 'var(--space-xs)', fontSize: 'var(--font-size-sm)' }}>
+                      Destination (SSD)
+                    </label>
+                    <select 
+                      className="form-select" 
+                      value={destId} 
+                      onChange={(e) => setDestId(e.target.value)}
+                      disabled={!!currentAction}
+                      style={{ width: '100%', padding: '8px', borderRadius: '4px', background: 'var(--color-bg-elevated)', color: 'white', border: '1px solid var(--color-border)' }}
+                    >
+                      <option value="">Select Destination...</option>
+                      {partitions.map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.diskName} ({p.id}) - {p.diskType}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {error && <div className="alert alert-error" style={{ marginTop: 'var(--space-md)' }}>{error}</div>}
+
+              <div style={{ marginTop: 'var(--space-lg)', textAlign: 'center' }}>
+                {currentAction ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 'var(--space-md)' }}>
+                    <div className="spinner" />
+                    <span>{currentAction}</span>
+                  </div>
+                ) : (
+                  <button 
+                    className="btn btn-primary" 
+                    onClick={copyEfiToSsd}
+                    disabled={!sourceId || !destId || sourceId === destId}
+                  >
+                    Copy EFI to SSD
+                  </button>
+                )}
+              </div>
             </div>
           )}
           
           {copyComplete && (
-            <div style={{ marginTop: 'var(--space-md)', color: 'var(--color-accent-green)' }}>
-              ✅ EFI copied successfully
+             <div style={{ marginTop: 'var(--space-md)', color: 'var(--color-accent-green)' }}>
+              ✅ EFI copied successfully from {partitions.find(p => p.id === sourceId)?.diskName} to {partitions.find(p => p.id === destId)?.diskName}
             </div>
           )}
         </div>
@@ -124,26 +254,6 @@ const PostInstallStep: React.FC = () => {
                   You can safely remove the USB drive and reboot.
                 </div>
               </div>
-            </div>
-
-            <div className="card" style={{ marginTop: 'var(--space-lg)' }}>
-              <div className="card-title" style={{ marginBottom: 'var(--space-md)' }}>
-                🛠️ Next Steps
-              </div>
-              <ul style={{ 
-                marginLeft: 'var(--space-lg)', 
-                color: 'var(--color-text-secondary)',
-                fontSize: 'var(--font-size-sm)',
-                lineHeight: 1.8
-              }}>
-                <li>Set up iCloud, iMessage, and FaceTime (optional)</li>
-                <li>Install your favorite apps from the App Store</li>
-                <li>Check for macOS updates in System Settings</li>
-                <li>Join the Hackintosh community for tips and updates</li>
-                {macosVersion === 'sequoia' && (
-                  <li>Launch HeliPort and add it to Login Items for auto-start</li>
-                )}
-              </ul>
             </div>
 
             <div style={{ marginTop: 'var(--space-xl)', textAlign: 'center' }}>

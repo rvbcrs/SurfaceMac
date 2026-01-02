@@ -17,26 +17,30 @@ const SmbiosStep: React.FC = () => {
   const generateSmbios = async (): Promise<void> => {
     setIsGenerating(true);
     
-    // Simulate SMBIOS generation
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // In real implementation:
-    // if (window.electronAPI) {
-    //   const data = await window.electronAPI.generateSMBIOS();
-    //   setSmbios(data);
-    // }
-    
-    // Mock data
-    const mockSmbios: SMBIOSData = {
-      model: 'MacBookAir9,1',
-      serial: 'C02' + Math.random().toString(36).substring(2, 10).toUpperCase(),
-      mlb: 'C02' + Math.random().toString(36).substring(2, 15).toUpperCase(),
-      uuid: crypto.randomUUID().toUpperCase(),
-    };
-    
-    setSmbios(mockSmbios);
-    updateConfig({ smbios: mockSmbios });
-    setIsGenerating(false);
+    try {
+      let data: SMBIOSData;
+      
+      if (window.electronAPI) {
+        // Use native Electron SMBIOS generator
+        data = await window.electronAPI.generateSMBIOS('MacBookAir9,1');
+      } else {
+        // Browser fallback for development
+        await new Promise(resolve => setTimeout(resolve, 500));
+        data = {
+          model: 'MacBookAir9,1',
+          serial: 'C02' + Math.random().toString(36).substring(2, 10).toUpperCase(),
+          mlb: 'C02' + Math.random().toString(36).substring(2, 15).toUpperCase(),
+          uuid: crypto.randomUUID().toUpperCase(),
+        };
+      }
+      
+      setSmbios(data);
+      updateConfig({ smbios: data });
+    } catch (error) {
+      console.error('Failed to generate SMBIOS:', error);
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const regenerate = (): void => {

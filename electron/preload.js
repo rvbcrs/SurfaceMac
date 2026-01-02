@@ -1,38 +1,56 @@
+/**
+ * SurfaceMac Wizard - Preload Script
+ * 
+ * Exposes safe IPC bridge between renderer and main process.
+ */
+
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Expose protected methods that allow the renderer process to use
-// the ipcRenderer without exposing the entire object
+// Expose protected methods to renderer
 contextBridge.exposeInMainWorld('electronAPI', {
     // Platform info
     getPlatform: () => ipcRenderer.invoke('get-platform'),
     getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 
+    // Permission checks (macOS)
+    checkFullDiskAccess: () => ipcRenderer.invoke('check-full-disk-access'),
+    openFullDiskSettings: () => ipcRenderer.invoke('open-full-disk-settings'),
+
+    // SMBIOS Generation (native TypeScript implementation)
+    generateSMBIOS: (model) => ipcRenderer.invoke('generate-smbios', model),
+
     // USB Operations
     listUSBDrives: () => ipcRenderer.invoke('list-usb-drives'),
     formatUSB: (drivePath, format) => ipcRenderer.invoke('format-usb', drivePath, format),
+    onFormatStatus: (callback) => ipcRenderer.on('format-status', (_, message) => callback(message)),
 
-    // Downloads
-    downloadFile: (url, dest) => ipcRenderer.invoke('download-file', url, dest),
-    onDownloadProgress: (callback) => ipcRenderer.on('download-progress', (event, progress) => callback(progress)),
+    // Downloads with progress
+    downloadFile: (url, destPath) => ipcRenderer.invoke('download-file', url, destPath),
+    onDownloadProgress: (callback) => ipcRenderer.on('download-progress', (_, progress) => callback(progress)),
+    downloadRecovery: (macosVersion, targetPath) => ipcRenderer.invoke('download-recovery', macosVersion, targetPath),
+    downloadFullInstaller: (macosVersion) => ipcRenderer.invoke('download-full-installer', macosVersion),
+    createInstallMedia: (installerPath, usbPath) => ipcRenderer.invoke('create-install-media', installerPath, usbPath),
+    downloadDefaultEFI: (url) => ipcRenderer.invoke('download-efi', url),
 
-    // Recovery
-    downloadRecovery: (macosVersion) => ipcRenderer.invoke('download-recovery', macosVersion),
+    // Config Operations
+    injectConfig: (details) => ipcRenderer.invoke('inject-config', details),
+    readConfig: (path) => ipcRenderer.invoke('read-config', path),
+    writeConfig: (path, config) => ipcRenderer.invoke('write-config', path, config),
 
-    // SMBIOS
-    generateSMBIOS: () => ipcRenderer.invoke('generate-smbios'),
-
-    // Config
-    readConfig: (configPath) => ipcRenderer.invoke('read-config', configPath),
-    writeConfig: (configPath, config) => ipcRenderer.invoke('write-config', configPath, config),
-
-    // EFI Operations
+    // EFI Operations (native implementation - no MountEFI Python needed)
+    listEFIPartitions: () => ipcRenderer.invoke('list-efi-partitions'),
     mountEFI: (diskPath) => ipcRenderer.invoke('mount-efi', diskPath),
+    unmountEFI: (diskPath) => ipcRenderer.invoke('unmount-efi', diskPath),
+    unmountDisk: (diskPath) => ipcRenderer.invoke('unmount-disk', diskPath),
     copyEFI: (source, dest) => ipcRenderer.invoke('copy-efi', source, dest),
+    onCopyProgress: (callback) => ipcRenderer.on('copy-progress', (_, file) => callback(file)),
+    downloadDefaultEFI: (url) => ipcRenderer.invoke('download-efi', url),
 
-    // File system
+    // Dialog operations
     selectDirectory: () => ipcRenderer.invoke('select-directory'),
-    selectUSBDrive: () => ipcRenderer.invoke('select-usb-drive'),
 
-    // Shell
+    // External links
     openExternal: (url) => ipcRenderer.invoke('open-external', url),
 });
+
+console.log('SurfaceMac preload script loaded');

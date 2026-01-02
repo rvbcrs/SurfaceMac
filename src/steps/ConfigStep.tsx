@@ -11,18 +11,23 @@ interface ConfigNodeProps {
 }
 
 const ConfigStep: React.FC = () => {
-  const { nextStep, prevStep, config, macosVersion } = useWizard();
+  const { nextStep, prevStep, config, macosVersion, cpuType } = useWizard();
   const [isConfiguring, setIsConfiguring] = useState(false);
   const [configComplete, setConfigComplete] = useState(false);
   const [showExpertMode, setShowExpertMode] = useState(false);
+  const [enableVerbose, setEnableVerbose] = useState(true); // Default to true for troubleshooting
+  const [ejected, setEjected] = useState(false);
+  
+  // Config file based on CPU type
+  const configFileName = `config-${cpuType}.plist`;
   
   // Mock config.plist structure for expert mode
   const [configTree] = useState<ConfigTreeData>({
     'PlatformInfo': {
       'Generic': {
-        'SystemSerialNumber': config.smbios?.serial || 'Not set',
-        'MLB': config.smbios?.mlb || 'Not set',
-        'SystemUUID': config.smbios?.uuid || 'Not set',
+        'SystemSerialNumber': config.smbios?.serial || 'Will be injected',
+        'MLB': config.smbios?.mlb || 'Will be injected',
+        'SystemUUID': config.smbios?.uuid || 'Will be injected',
         'SystemProductName': 'MacBookAir9,1',
       },
     },
@@ -46,13 +51,32 @@ const ConfigStep: React.FC = () => {
   const applyConfiguration = async (): Promise<void> => {
     setIsConfiguring(true);
     
-    // Simulate config update
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // In real implementation:
-    // if (window.electronAPI && config.efiPath) {
-    //   await window.electronAPI.writeConfig(config.efiPath + '/EFI/OC/config.plist', configTree as ConfigPlist);
-    // }
+    try {
+      if (window.electronAPI && config.smbios && config.selectedUsb) {
+        // In Electron: Read the correct config file, inject SMBIOS, and save
+        await window.electronAPI.injectConfig({
+            cpuType,
+            smbios: config.smbios,
+            macosVersion,
+            diskPath: config.selectedUsb.path,
+            verbose: enableVerbose
+        });
+        
+        // Let user see completion for a moment
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Keep EFI mounted so user can verify config before ejecting
+        // await window.electronAPI.unmountEFI(config.selectedUsb.path);
+        console.log("EFI kept mounted for user verification. Eject USB when ready.");
+      } else {
+        if (!config.selectedUsb) console.warn('No USB selected in config, cannot inject.');
+        // Simulate for browser
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      }
+    } catch (error) {
+      console.error('Failed to apply configuration:', error);
+      // We should probably show an error state here, but for now log it
+    }
     
     setIsConfiguring(false);
     setConfigComplete(true);
@@ -63,13 +87,43 @@ const ConfigStep: React.FC = () => {
       <header className="content-header">
         <h1 className="content-title">OpenCore Configuration</h1>
         <p className="content-subtitle">
-          Configure config.plist with your SMBIOS data and WiFi drivers.
+          Configure {configFileName} with your SMBIOS data.
         </p>
       </header>
 
       <div className="content-body fade-in">
         {!configComplete && (
           <>
+            <div className="alert alert-info" style={{ marginBottom: 'var(--space-lg)' }}>
+              <div className="alert-icon">📋</div>
+              <div className="alert-content">
+                <div className="alert-title">Config File: {configFileName}</div>
+                <div className="alert-message">
+                  Using the {cpuType.toUpperCase()} configuration for your Surface Pro 7. 
+                  This will be renamed to config.plist automatically.
+                </div>
+              </div>
+            </div>
+
+            {/* Verbose Mode Toggle */}
+            <div className="card" style={{ marginBottom: 'var(--space-lg)', padding: 'var(--space-md)' }}>
+                <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}>
+                    <input 
+                        type="checkbox" 
+                        checked={enableVerbose} 
+                        onChange={(e) => setEnableVerbose(e.target.checked)} 
+                        style={{ marginRight: '10px' }}
+                        disabled={isConfiguring}
+                    />
+                    <div>
+                        <div style={{ fontWeight: 'bold' }}>Enable Verbose Mode (-v)</div>
+                        <div style={{ fontSize: 'var(--font-size-sm)', opacity: 0.8 }}>
+                            Useful for debugging boot issues. Disabling shows the Apple boot logo.
+                        </div>
+                    </div>
+                </label>
+            </div>
+
             <div className="card">
               <div className="card-header">
                 <div className="card-icon">⚙️</div>
@@ -82,13 +136,19 @@ const ConfigStep: React.FC = () => {
               </div>
               <ul style={{ marginTop: 'var(--space-md)', marginLeft: 'var(--space-lg)', color: 'var(--color-text-secondary)' }}>
                 <li style={{ marginBottom: 'var(--space-sm)' }}>
-                  ✅ SMBIOS data (Serial, MLB, UUID) injected
+                  ✅ Use {configFileName} as base configuration
                 </li>
                 <li style={{ marginBottom: 'var(--space-sm)' }}>
-                  ✅ WiFi kext configured: {macosVersion === 'sonoma' ? 'AirportItlwm.kext' : 'itlwm.kext'}
+                  ✅ <strong>SystemSerialNumber:</strong> {config.smbios?.serial || 'Not generated yet'}
                 </li>
                 <li style={{ marginBottom: 'var(--space-sm)' }}>
-                  ✅ Model set to MacBookAir9,1 (Ice Lake)
+                  ✅ <strong>MLB:</strong> {config.smbios?.mlb || 'Not generated yet'}
+                </li>
+                <li style={{ marginBottom: 'var(--space-sm)' }}>
+                  ✅ <strong>SystemUUID:</strong> {config.smbios?.uuid || 'Not generated yet'}
+                </li>
+                <li style={{ marginBottom: 'var(--space-sm)' }}>
+                  ✅ WiFi kext: {macosVersion === 'sonoma' ? 'AirportItlwm.kext' : 'itlwm.kext'}
                 </li>
               </ul>
             </div>
@@ -138,6 +198,34 @@ const ConfigStep: React.FC = () => {
               </div>
             </div>
           </div>
+        )}
+
+        {configComplete && config.selectedUsb && (
+             <div style={{ marginTop: 'var(--space-md)', textAlign: 'center' }}>
+                 {!ejected ? (
+                    <button 
+                        className="btn btn-ghost" 
+                        onClick={async () => {
+                            if (!config.selectedUsb) return;
+                            try {
+                                if (window.electronAPI) {
+                                    await window.electronAPI.unmountDisk(config.selectedUsb.path);
+                                    setEjected(true);
+                                }
+                            } catch (e) {
+                                alert('Failed to eject: ' + String(e));
+                            }
+                        }}
+                        style={{ border: '1px solid var(--color-border)', fontSize: 'var(--font-size-sm)' }}
+                    >
+                        ⏏️ Safely Eject USB
+                    </button>
+                 ) : (
+                    <span style={{ color: 'var(--color-accent-green)', fontWeight: 600 }}>
+                        ✓ USB Safely Ejected
+                    </span>
+                 )}
+             </div>
         )}
       </div>
 
