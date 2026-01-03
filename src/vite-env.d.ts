@@ -4,6 +4,7 @@
 interface ElectronAPI {
   getPlatform: () => Promise<string>;
   getAppVersion: () => Promise<string>;
+  checkAdmin: () => Promise<boolean>;
   checkFullDiskAccess: () => Promise<{ hasAccess: boolean }>;
   openFullDiskSettings: () => Promise<{ success: boolean }>;
   listUSBDrives: () => Promise<USBDrive[]>;
@@ -12,8 +13,14 @@ interface ElectronAPI {
   onDownloadProgress: (callback: (progress: any) => void) => void;
   downloadRecovery: (version: string, targetPath?: string) => Promise<{ success: boolean }>;
   downloadFullInstaller: (version: string) => Promise<{ success: boolean; installerPath: string; extractedPath?: string }>;
+  extractBaseSystemFromPkg: (pkgPath: string) => Promise<{ success: boolean; baseSystemPath: string; baseChunklistPath: string | null; baseSystemSize: number }>;
+  copyRecoveryToUsb: (options: { baseSystemPath: string; baseChunklistPath: string | null; usbVolumePath: string }) => Promise<{ success: boolean; recoveryDir: string }>;
   createInstallMedia: (installerPath: string, volumePath: string) => Promise<{ success: boolean }>;
   generateSMBIOS: (model?: string) => Promise<SMBIOSData>;
+  copyEFI: (source: string, dest: string) => Promise<{ success: boolean }>;
+  patchEfiExFat: (efiPath: string) => Promise<{ success: boolean; error?: string }>;
+  unmountEFI: (diskPath: string) => Promise<{ success: boolean }>;
+  unmountDisk: (diskPath: string) => Promise<{ success: boolean }>;
   readConfig: (path: string) => Promise<any>;
   writeConfig: (path: string, config: any) => Promise<{ success: boolean }>;
   listEFIPartitions: () => Promise<EFIPartition[]>;
@@ -96,4 +103,4 @@ declare global {
   }
 }
 
-export {};
+export { };

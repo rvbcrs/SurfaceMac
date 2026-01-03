@@ -19,13 +19,13 @@ const UsbStep: React.FC = () => {
   const [progress, setProgress] = useState(0);
   const [formatComplete, setFormatComplete] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+
   // Enhanced Progress
   const [formatStatus, setFormatStatus] = useState<string>('');
   const progressBarRef = useRef<HTMLDivElement>(null);
   const [skipFormat, setSkipFormat] = useState(false);
   const [skipEfiCopy, setSkipEfiCopy] = useState(false);
-  
+
   // Installer type: 'recovery' (800MB, needs internet) or 'full' (13GB, offline)
   const [installerType, setInstallerType] = useState<'recovery' | 'full'>('recovery');
 
@@ -39,9 +39,25 @@ const UsbStep: React.FC = () => {
   }, [macosVersion]);
 
 
+  // Check Admin on mount (Windows)
+  useEffect(() => {
+    if (platform === 'win32' && window.electronAPI) {
+      window.electronAPI.checkAdmin().then((isAdmin) => {
+        if (!isAdmin) {
+          setError('⚠️ WARNING: Administrator privileges are missing! Please restart the app/terminal as Administrator (Right-click -> Run as Administrator), otherwise writing to the USB will fail.');
+        }
+      });
+    }
+  }, [platform]);
+
   // Load USB drives on mount and listeners
   const refreshDrives = async (): Promise<void> => {
-    setError(null);
+    // Only clear error if it's not the admin warning
+    // Actually, refreshDrives is called manually mostly, so we can clear.
+    // But on mount we don't want to clear the admin warning we just set.
+    // Let's handle error clearing carefully.
+    setError(prev => prev && prev.includes('Administrator') ? prev : null);
+
     try {
       if (window.electronAPI) {
         const drives = await window.electronAPI.listUSBDrives();
@@ -60,34 +76,34 @@ const UsbStep: React.FC = () => {
 
   // Load USB drives on mount and listeners
   useEffect(() => {
-    refreshDrives(); 
-    
+    refreshDrives();
+
     if (window.electronAPI) {
       // Download progress
       window.electronAPI.onDownloadProgress((p) => {
         const overallProgress = 20 + (p.percent * 0.6);
         setProgress(overallProgress);
       });
-      
+
       // Detailed format/EFI status
       window.electronAPI.onFormatStatus((message) => {
-          setFormatStatus(message);
-          // Auto-scroll to progress bar on update if it exists
-          if (progressBarRef.current) {
-               progressBarRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
+        setFormatStatus(message);
+        // Auto-scroll to progress bar on update if it exists
+        if (progressBarRef.current) {
+          progressBarRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
       });
 
       // Copy Progress (EFI files)
       window.electronAPI.onCopyProgress((file) => {
-          setFormatStatus(`Copying: ${file}`);
+        setFormatStatus(`Copying: ${file}`);
       });
     }
   }, []);
 
   const startProcess = async (): Promise<void> => {
     if (!selectedUsb) return;
-    
+
     setIsProcessing(true);
     setFormatComplete(false);
     setError(null);
@@ -97,60 +113,61 @@ const UsbStep: React.FC = () => {
 
     // Scroll progress bar into view
     setTimeout(() => {
-        if (progressBarRef.current) {
-            progressBarRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
+      if (progressBarRef.current) {
+        progressBarRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
     }, 100);
-    
+
     try {
 
       if (window.electronAPI) {
         if (!skipFormat) {
-            // Step 1: Format USB drive (0-20%)
-            setProcessStep('Formatting USB drive...');
-            setProgress(10);
-            
-            // Recovery uses FAT32 (Cross-platform compatible, native boot)
-            // Full Installer uses HFS+ (Required for macOS Installer App)
-            const format = installerType === 'full' ? 'Mac OS Extended (Journaled)' : 'FAT32';
-            
-            const formatResult = await window.electronAPI.formatUSB(selectedUsb.path, format);
-            setProgress(20);
-            
-            // Step 2: Download macOS (20-80%)
-            const isFullInstaller = installerType === 'full';
-            const downloadSize = isFullInstaller ? '~13 GB' : '~800 MB';
-            setProcessStep(`Downloading macOS ${macosVersion === 'sonoma' ? 'Sonoma' : 'Sequoia'} ${isFullInstaller ? 'Full Installer' : 'Recovery'}...`);
-            setFormatStatus(`Preparing ${downloadSize} download...`);
-            
-            // Listen for download progress with appropriate unit display
-            const progressListener = (progress: { percent: number; downloaded: number; total: number }) => {
-              if (progress.total > 0) {
-                // Use GB for full installer, MB for recovery
-                const useGB = progress.total > 1024 * 1024 * 1024;
-                const downloaded = useGB 
-                  ? (progress.downloaded / (1024 * 1024 * 1024)).toFixed(2)
-                  : (progress.downloaded / (1024 * 1024)).toFixed(1);
-                const total = useGB
-                  ? (progress.total / (1024 * 1024 * 1024)).toFixed(2)
-                  : (progress.total / (1024 * 1024)).toFixed(0);
-                const unit = useGB ? 'GB' : 'MB';
-                setFormatStatus(`Downloading: ${downloaded} / ${total} ${unit} (${progress.percent.toFixed(0)}%)`);
-                // Update main progress bar (20-80% range)
-                setProgress(20 + (progress.percent * 0.6));
-              }
-            };
-            window.electronAPI.onDownloadProgress(progressListener);
-            
-            if (isFullInstaller) {
-              // Full installer path: download pkg, then createinstallmedia
-              const result = await window.electronAPI.downloadFullInstaller(macosVersion);
-              setProgress(60);
-              
-              // Now run createinstallmedia (this takes 20-30 min)
+          // Step 1: Format USB drive (0-20%)
+          setProcessStep('Formatting USB drive...');
+          setProgress(10);
+
+          // Recovery uses FAT32 (Cross-platform compatible, native boot)
+          // Full Installer uses HFS+ (Required for macOS Installer App)
+          const format = installerType === 'full' ? 'Mac OS Extended (Journaled)' : 'FAT32';
+
+          const formatResult = await window.electronAPI.formatUSB(selectedUsb.path, format);
+          setProgress(20);
+
+          // Step 2: Download macOS (20-80%)
+          const isFullInstaller = installerType === 'full';
+          const downloadSize = isFullInstaller ? '~13 GB' : '~800 MB';
+          setProcessStep(`Downloading macOS ${macosVersion === 'sonoma' ? 'Sonoma' : 'Sequoia'} ${isFullInstaller ? 'Full Installer' : 'Recovery'}...`);
+          setFormatStatus(`Preparing ${downloadSize} download...`);
+
+          // Listen for download progress with appropriate unit display
+          const progressListener = (progress: { percent: number; downloaded: number; total: number }) => {
+            if (progress.total > 0) {
+              // Use GB for full installer, MB for recovery
+              const useGB = progress.total > 1024 * 1024 * 1024;
+              const downloaded = useGB
+                ? (progress.downloaded / (1024 * 1024 * 1024)).toFixed(2)
+                : (progress.downloaded / (1024 * 1024)).toFixed(1);
+              const total = useGB
+                ? (progress.total / (1024 * 1024 * 1024)).toFixed(2)
+                : (progress.total / (1024 * 1024)).toFixed(0);
+              const unit = useGB ? 'GB' : 'MB';
+              setFormatStatus(`Downloading: ${downloaded} / ${total} ${unit} (${progress.percent.toFixed(0)}%)`);
+              // Update main progress bar (20-80% range)
+              setProgress(20 + (progress.percent * 0.6));
+            }
+          };
+          window.electronAPI.onDownloadProgress(progressListener);
+
+          if (isFullInstaller) {
+            // Full installer path: download pkg
+            setProcessStep('Downloading macOS Full Installer...');
+            const result = await window.electronAPI.downloadFullInstaller(macosVersion);
+            setProgress(50);
+
+            if (platform === 'darwin') {
+              // macOS: Run createinstallmedia (traditional approach)
               setProcessStep('Creating bootable USB (this takes ~20 minutes)...');
               setFormatStatus('Running createinstallmedia...');
-              
               // Full Installer always creates "Install macOS [Version]" volume
               // But createInstallMedia command takes volume path to *mount point*
               // We pass the volume path returned by format, or fallback to standard logic
@@ -158,76 +175,101 @@ const UsbStep: React.FC = () => {
               // Use extracted path if available (from gibMacOS service) so we don't need /Applications
               await window.electronAPI.createInstallMedia(result.extractedPath || result.installerPath, formatResult.volumePath || `/Volumes/Install macOS`);
             } else {
-              // Recovery path: just download BaseSystem.dmg
-              // Pass the volume path from format (e.g. /Volumes/INSTALL) so we copy there
-              await window.electronAPI.downloadRecovery(macosVersion, formatResult.volumePath);
+              // Windows: Extract BaseSystem.dmg from PKG using 7-Zip
+              setProcessStep('Extracting macOS recovery files...');
+              setFormatStatus('Scanning InstallAssistant.pkg (requires 7-Zip)...');
+
+              const extractResult = await window.electronAPI.extractBaseSystemFromPkg(result.installerPath);
+              setProgress(70);
+
+              // Copy extracted files to USB recovery folder
+              setProcessStep('Copying recovery files to USB...');
+              setFormatStatus(`Copying BaseSystem.dmg (${(extractResult.baseSystemSize / 1024 / 1024).toFixed(0)} MB)...`);
+
+              await window.electronAPI.copyRecoveryToUsb({
+                baseSystemPath: extractResult.baseSystemPath,
+                baseChunklistPath: extractResult.baseChunklistPath,
+                usbVolumePath: formatResult.volumePath || 'D:\\'
+              });
             }
-            setProgress(80);
+          } else {
+            // Recovery path: just download BaseSystem.dmg
+            // Pass the volume path from format (e.g. /Volumes/INSTALL) so we copy there
+            await window.electronAPI.downloadRecovery(macosVersion, formatResult.volumePath);
+          }
+          setProgress(80);
         } else {
-             console.log('Skipping Format & Recovery as requested.');
-             setProcessStep('Skipping Format & Recovery...');
-             setFormatStatus('Initializing EFI Update...');
-             setProgress(50);
-             // Short delay for UX
-             await new Promise(r => setTimeout(r, 800));
+          console.log('Skipping Format & Recovery as requested.');
+          setProcessStep('Skipping Format & Recovery...');
+          setFormatStatus('Initializing EFI Update...');
+          setProgress(50);
+          // Short delay for UX
+          await new Promise(r => setTimeout(r, 800));
         }
-        
+
         // Step 3: Copy EFI folder to USB (80-100%)
         if (!skipEfiCopy) {
-            setProcessStep('Setting up EFI...');
-            
-            let efiSourcePath = '';
-            if (config.efiSource.type === 'default') {
-                const repo = 'repo:balopez83/Surface-Pro-7-Hackintosh';
-                setProcessStep('Downloading EFI from GitHub...');
-                efiSourcePath = await window.electronAPI.downloadDefaultEFI(repo);
-            } else if (config.efiSource.type === 'url') {
-                setProcessStep('Downloading custom EFI...');
-                efiSourcePath = await window.electronAPI.downloadDefaultEFI(config.efiSource.value);
-            } else {
-                efiSourcePath = config.efiSource.value;
-            }
+          setProcessStep('Setting up EFI...');
 
-            if (efiSourcePath) {
-               setProcessStep('Mounting EFI Partition...');
-               setFormatStatus('Mounting...');
-               const usbEfiPath = await window.electronAPI.mountEFI(selectedUsb.path);
-               
-               setProcessStep('Copying EFI files...');
-               await window.electronAPI.copyEFI(efiSourcePath, usbEfiPath);
-               
-               console.log('EFI Setup complete. Keeping mounted for configuration.');
-               setFormatStatus('EFI Setup complete!');
-            } else {
-               console.warn('No EFI source available. Skipping EFI setup.');
-            }
+          let efiSourcePath = '';
+          if (config.efiSource.type === 'default') {
+            const repo = 'repo:balopez83/Surface-Pro-7-Hackintosh';
+            setProcessStep('Downloading EFI from GitHub...');
+            efiSourcePath = await window.electronAPI.downloadDefaultEFI(repo);
+          } else if (config.efiSource.type === 'url') {
+            setProcessStep('Downloading custom EFI...');
+            efiSourcePath = await window.electronAPI.downloadDefaultEFI(config.efiSource.value);
+          } else {
+            efiSourcePath = config.efiSource.value;
+          }
+
+          if (efiSourcePath) {
+            // Patch EFI locally (safe & fast) use new API
+            setProcessStep('Patching EFI (Adding ExFatDxe)...');
+            await window.electronAPI.patchEfiExFat(efiSourcePath);
+
+            // Mount & Copy
+            setProcessStep('Mounting EFI Partition...');
+            setFormatStatus('Mounting...');
+            // Ensure we pass the disk path correctly
+            const usbEfiPath = await window.electronAPI.mountEFI(selectedUsb.path);
+
+            setProcessStep('Copying EFI files to USB...');
+            setFormatStatus('Copying... (This may ask for Admin permission once)');
+            await window.electronAPI.copyEFI(efiSourcePath, usbEfiPath);
+
+            console.log('EFI Setup complete.');
+            setFormatStatus('EFI Setup complete!');
+          } else {
+            console.warn('No EFI source available.');
+          }
         } else {
-             // Just mount the EFI for the next step
-             setProcessStep('Mounting EFI for Configuration...');
-             setFormatStatus('Mounting...');
-             await window.electronAPI.mountEFI(selectedUsb.path);
-             setFormatStatus('Ready for Configuration');
+          // Just mount the EFI for the next step
+          setProcessStep('Mounting EFI for Configuration...');
+          setFormatStatus('Mounting...');
+          await window.electronAPI.mountEFI(selectedUsb.path);
+          setFormatStatus('Ready for Configuration');
         }
-        
+
         setProgress(100);
       } else {
         // Browser fallback - simulate the full process
         setProcessStep('Formatting...');
         setProgress(10);
         await new Promise(resolve => setTimeout(resolve, 1000));
-        
+
         setProcessStep('Downloading Recovery Image...');
         for (let i = 20; i <= 80; i += 10) {
-            setProgress(i);
-            await new Promise(resolve => setTimeout(resolve, 500));
+          setProgress(i);
+          await new Promise(resolve => setTimeout(resolve, 500));
         }
-        
+
         setProcessStep('Copying EFI...');
         setProgress(90);
         await new Promise(resolve => setTimeout(resolve, 1000));
         setProgress(100);
       }
-      
+
       setFormatComplete(true);
       setProcessStep('Complete!');
       setFormatStatus('USB Creation Successful!');
@@ -257,112 +299,112 @@ const UsbStep: React.FC = () => {
           <div className="alert-content">
             <div className="alert-title">Warning: Data Loss</div>
             <div className="alert-message">
-              Formatting will erase ALL data on the selected USB drive. 
+              Formatting will erase ALL data on the selected USB drive.
               Make sure you have backed up any important files.
             </div>
           </div>
         </div>
-        
+
         {/* Installer Type Selection */}
         <div className="card" style={{ marginTop: 'var(--space-md)', background: 'rgba(30, 30, 40, 0.5)' }}>
-            <div style={{ marginBottom: 'var(--space-sm)' }}>
-                <strong>Installer Method:</strong>
-            </div>
-            <div style={{ display: 'flex', gap: 'var(--space-md)', flexWrap: 'wrap' }}>
-                <label style={{ 
-                    display: 'flex', 
-                    alignItems: 'flex-start', 
-                    cursor: isProcessing ? 'not-allowed' : 'pointer', 
-                    padding: 'var(--space-sm)', 
-                    borderRadius: 'var(--radius-sm)',
-                    background: installerType === 'recovery' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
-                    border: installerType === 'recovery' ? '1px solid rgba(99, 102, 241, 0.5)' : '1px solid transparent',
-                    flex: 1,
-                    minWidth: '200px'
-                }}>
-                    <input 
-                        type="radio" 
-                        name="installerType" 
-                        checked={installerType === 'recovery'}
-                        onChange={() => setInstallerType('recovery')}
-                        disabled={isProcessing}
-                        style={{ marginRight: '10px', marginTop: '4px' }}
-                    />
-                    <div>
-                        <div style={{ fontWeight: 600 }}>⚡ Recovery Image</div>
-                        <div style={{ fontSize: 'var(--font-size-sm)', opacity: 0.8 }}>~800 MB, needs internet during install</div>
-                        {macosVersion === 'sequoia' && (
-                             <div style={{ marginTop: '4px', color: 'var(--color-status-warning)', fontSize: '0.75rem' }}>
-                                 ⚠️ Requires USB Ethernet (Intel WiFi not supported in Recovery for Sequoia)
-                             </div>
-                        )}
-                    </div>
-                </label>
-                <label style={{ 
-                    display: 'flex', 
-                    alignItems: 'flex-start', 
-                    cursor: isProcessing ? 'not-allowed' : 'pointer', 
-                    padding: 'var(--space-sm)', 
-                    borderRadius: 'var(--radius-sm)',
-                    background: installerType === 'full' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
-                    border: installerType === 'full' ? '1px solid rgba(99, 102, 241, 0.5)' : '1px solid transparent',
-                    flex: 1,
-                    minWidth: '200px'
-                }}>
-                    <input 
-                        type="radio" 
-                        name="installerType" 
-                        checked={installerType === 'full'}
-                        onChange={() => setInstallerType('full')}
-                        disabled={isProcessing}
-                        style={{ marginRight: '10px', marginTop: '4px' }}
-                    />
-                    <div>
-                        <div style={{ fontWeight: 600 }}>🎯 Full Installer (Recommended)</div>
-                        <div style={{ fontSize: 'var(--font-size-sm)', opacity: 0.8 }}>~13 GB download, offline install</div>
-                         {macosVersion === 'sequoia' && (
-                             <div style={{ marginTop: '4px', color: 'var(--color-status-success)', fontSize: '0.75rem' }}>
-                                 ✓ Best for Sequoia (No WiFi needed)
-                             </div>
-                        )}
-                    </div>
-                </label>
-            </div>
+          <div style={{ marginBottom: 'var(--space-sm)' }}>
+            <strong>Installer Method:</strong>
+          </div>
+          <div style={{ display: 'flex', gap: 'var(--space-md)', flexWrap: 'wrap' }}>
+            <label style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              cursor: isProcessing ? 'not-allowed' : 'pointer',
+              padding: 'var(--space-sm)',
+              borderRadius: 'var(--radius-sm)',
+              background: installerType === 'recovery' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+              border: installerType === 'recovery' ? '1px solid rgba(99, 102, 241, 0.5)' : '1px solid transparent',
+              flex: 1,
+              minWidth: '200px'
+            }}>
+              <input
+                type="radio"
+                name="installerType"
+                checked={installerType === 'recovery'}
+                onChange={() => setInstallerType('recovery')}
+                disabled={isProcessing}
+                style={{ marginRight: '10px', marginTop: '4px' }}
+              />
+              <div>
+                <div style={{ fontWeight: 600 }}>⚡ Recovery Image</div>
+                <div style={{ fontSize: 'var(--font-size-sm)', opacity: 0.8 }}>~800 MB, needs internet during install</div>
+                {macosVersion === 'sequoia' && (
+                  <div style={{ marginTop: '4px', color: 'var(--color-status-warning)', fontSize: '0.75rem' }}>
+                    ⚠️ Requires USB Ethernet (Intel WiFi not supported in Recovery for Sequoia)
+                  </div>
+                )}
+              </div>
+            </label>
+            <label style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              cursor: isProcessing ? 'not-allowed' : 'pointer',
+              padding: 'var(--space-sm)',
+              borderRadius: 'var(--radius-sm)',
+              background: installerType === 'full' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+              border: installerType === 'full' ? '1px solid rgba(99, 102, 241, 0.5)' : '1px solid transparent',
+              flex: 1,
+              minWidth: '200px'
+            }}>
+              <input
+                type="radio"
+                name="installerType"
+                checked={installerType === 'full'}
+                onChange={() => setInstallerType('full')}
+                disabled={isProcessing}
+                style={{ marginRight: '10px', marginTop: '4px' }}
+              />
+              <div>
+                <div style={{ fontWeight: 600 }}>🎯 Full Installer (Recommended)</div>
+                <div style={{ fontSize: 'var(--font-size-sm)', opacity: 0.8 }}>~13 GB download, offline install</div>
+                {macosVersion === 'sequoia' && (
+                  <div style={{ marginTop: '4px', color: 'var(--color-status-success)', fontSize: '0.75rem' }}>
+                    ✓ Best for Sequoia (No WiFi needed)
+                  </div>
+                )}
+              </div>
+            </label>
+          </div>
         </div>
-        
+
         {/* Skip Options */}
         <div style={{ marginTop: 'var(--space-md)' }}>
-           <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', userSelect: 'none', marginBottom: '8px' }}>
-               <input 
-                  type="checkbox" 
-                  checked={skipFormat} 
-                  onChange={(e) => {
-                      setSkipFormat(e.target.checked);
-                      if (!e.target.checked) setSkipEfiCopy(false); // Can't skip copy if we are formatting
-                  }} 
-                  style={{ marginRight: '10px' }}
-                  disabled={isProcessing}
-               />
-               <span>
-                  <strong>Update EFI Only</strong> (Skip Format & Recovery)
-               </span>
-           </label>
-           
-           <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', userSelect: 'none', marginLeft: '24px' }}>
-               <input 
-                  type="checkbox" 
-                  checked={skipEfiCopy} 
-                  onChange={(e) => {
-                      setSkipEfiCopy(e.target.checked);
-                      if (e.target.checked) setSkipFormat(true); // Must skip format if skipping copy
-                  }} 
-                  style={{ marginRight: '10px' }}
-                  disabled={isProcessing}
-               />
-               <span>
-                  <strong>Skip EFI Copy</strong> (Use existing EFI on USB)
-               </span>
-           </label>
+          <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', userSelect: 'none', marginBottom: '8px' }}>
+            <input
+              type="checkbox"
+              checked={skipFormat}
+              onChange={(e) => {
+                setSkipFormat(e.target.checked);
+                if (!e.target.checked) setSkipEfiCopy(false); // Can't skip copy if we are formatting
+              }}
+              style={{ marginRight: '10px' }}
+              disabled={isProcessing}
+            />
+            <span>
+              <strong>Update EFI Only</strong> (Skip Format & Recovery)
+            </span>
+          </label>
+
+          <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', userSelect: 'none', marginLeft: '24px' }}>
+            <input
+              type="checkbox"
+              checked={skipEfiCopy}
+              onChange={(e) => {
+                setSkipEfiCopy(e.target.checked);
+                if (e.target.checked) setSkipFormat(true); // Must skip format if skipping copy
+              }}
+              style={{ marginRight: '10px' }}
+              disabled={isProcessing}
+            />
+            <span>
+              <strong>Skip EFI Copy</strong> (Use existing EFI on USB)
+            </span>
+          </label>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'var(--space-xl)' }}>
@@ -373,13 +415,13 @@ const UsbStep: React.FC = () => {
         </div>
 
         {usbDrives.length === 0 ? (
-           <div className="card" style={{ textAlign: 'center', padding: 'var(--space-xl)' }}>
-             <p>No USB drives detected. Please insert a 16GB+ USB drive.</p>
-           </div>
+          <div className="card" style={{ textAlign: 'center', padding: 'var(--space-xl)' }}>
+            <p>No USB drives detected. Please insert a 16GB+ USB drive.</p>
+          </div>
         ) : (
           <div className="grid-list">
             {usbDrives.map(drive => (
-              <div 
+              <div
                 key={drive.id}
                 className={`card ${selectedUsb?.id === drive.id ? 'selected' : ''}`}
                 onClick={() => !isProcessing && setSelectedUsb(drive)}
@@ -407,23 +449,23 @@ const UsbStep: React.FC = () => {
               <div className="progress-fill" style={{ width: `${progress}%` }}></div>
             </div>
             {formatStatus && (
-               <div style={{ marginTop: 'var(--space-xs)', fontSize: 'var(--font-size-sm)', color: 'var(--color-text-secondary)', fontStyle: 'italic' }}>
-                   {formatStatus}
-               </div>
+              <div style={{ marginTop: 'var(--space-xs)', fontSize: 'var(--font-size-sm)', color: 'var(--color-text-secondary)', fontStyle: 'italic' }}>
+                {formatStatus}
+              </div>
             )}
           </div>
         )}
 
         {formatComplete && (
-            <div className="alert alert-success" style={{ marginTop: 'var(--space-lg)' }}>
-                <div className="alert-icon">✅</div>
-                <div className="alert-content">
-                    <div className="alert-title">USB Prepared Successfully!</div>
-                    <div className="alert-message">
-                        Your USB drive is ready. Please click <strong>Next</strong> to configure the EFI serial numbers.
-                    </div>
-                </div>
+          <div className="alert alert-success" style={{ marginTop: 'var(--space-lg)' }}>
+            <div className="alert-icon">✅</div>
+            <div className="alert-content">
+              <div className="alert-title">USB Prepared Successfully!</div>
+              <div className="alert-message">
+                Your USB drive is ready. Please click <strong>Next</strong> to configure the EFI serial numbers.
+              </div>
             </div>
+          </div>
         )}
 
         {error && (
@@ -436,22 +478,22 @@ const UsbStep: React.FC = () => {
       </div>
 
       <footer className="content-footer">
-          <button className="btn btn-secondary" onClick={prevStep} disabled={isProcessing}>
-            Back
-          </button>
-          <button 
-            className="btn btn-primary" 
-            onClick={() => {
-                if (formatComplete) {
-                    nextStep();
-                } else {
-                    startProcess();
-                }
-            }}
-            disabled={(!selectedUsb && !skipFormat && !skipEfiCopy) || (isProcessing && !formatComplete)}
-          >
-            {formatComplete ? 'Next' : 'Start Process'}
-          </button>
+        <button className="btn btn-secondary" onClick={prevStep} disabled={isProcessing}>
+          Back
+        </button>
+        <button
+          className="btn btn-primary"
+          onClick={() => {
+            if (formatComplete) {
+              nextStep();
+            } else {
+              startProcess();
+            }
+          }}
+          disabled={(!selectedUsb && !skipFormat && !skipEfiCopy) || (isProcessing && !formatComplete)}
+        >
+          {formatComplete ? 'Next' : 'Start Process'}
+        </button>
       </footer>
     </>
   );

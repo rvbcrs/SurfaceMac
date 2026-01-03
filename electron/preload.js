@@ -10,8 +10,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
     // Platform info
     getPlatform: () => ipcRenderer.invoke('get-platform'),
-    getAppVersion: () => ipcRenderer.invoke('get-app-version'),
-
+    getAppVersion: () => ipcRenderer.invoke('get-app-version'), // Fixed back to get-app-version
+    checkAdmin: () => ipcRenderer.invoke('check-admin'),
     // Permission checks (macOS)
     checkFullDiskAccess: () => ipcRenderer.invoke('check-full-disk-access'),
     openFullDiskSettings: () => ipcRenderer.invoke('open-full-disk-settings'),
@@ -30,7 +30,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     downloadRecovery: (macosVersion, targetPath) => ipcRenderer.invoke('download-recovery', macosVersion, targetPath),
     downloadFullInstaller: (macosVersion) => ipcRenderer.invoke('download-full-installer', macosVersion),
     createInstallMedia: (installerPath, usbPath) => ipcRenderer.invoke('create-install-media', installerPath, usbPath),
-    downloadDefaultEFI: (url) => ipcRenderer.invoke('download-efi', url),
+    extractBaseSystemFromPkg: (pkgPath) => ipcRenderer.invoke('extract-basesystem-from-pkg', pkgPath),
+    copyRecoveryToUsb: (options) => ipcRenderer.invoke('copy-recovery-to-usb', options),
 
     // Config Operations
     injectConfig: (details) => ipcRenderer.invoke('inject-config', details),
@@ -38,13 +39,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     writeConfig: (path, config) => ipcRenderer.invoke('write-config', path, config),
 
     // EFI Operations (native implementation - no MountEFI Python needed)
+    // EFI Operations (native implementation - no MountEFI Python needed)
     listEFIPartitions: () => ipcRenderer.invoke('list-efi-partitions'),
+    downloadDefaultEFI: (repoOrUrl) => ipcRenderer.invoke('download-efi', repoOrUrl),
     mountEFI: (diskPath) => ipcRenderer.invoke('mount-efi', diskPath),
+    copyEFI: (source, dest) => ipcRenderer.invoke('copy-efi', source, dest),
+    patchEfiExFat: (efiPath) => ipcRenderer.invoke('patch-efi-exfat', efiPath),
     unmountEFI: (diskPath) => ipcRenderer.invoke('unmount-efi', diskPath),
     unmountDisk: (diskPath) => ipcRenderer.invoke('unmount-disk', diskPath),
-    copyEFI: (source, dest) => ipcRenderer.invoke('copy-efi', source, dest),
     onCopyProgress: (callback) => ipcRenderer.on('copy-progress', (_, file) => callback(file)),
-    downloadDefaultEFI: (url) => ipcRenderer.invoke('download-efi', url),
 
     // Dialog operations
     selectDirectory: () => ipcRenderer.invoke('select-directory'),
