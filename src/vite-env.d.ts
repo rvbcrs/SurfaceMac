@@ -11,7 +11,7 @@ interface ElectronAPI {
   downloadFile: (url: string, dest: string) => Promise<void>;
   onDownloadProgress: (callback: (progress: any) => void) => void;
   downloadRecovery: (version: string, targetPath?: string) => Promise<{ success: boolean }>;
-  downloadFullInstaller: (version: string) => Promise<{ success: boolean; installerPath: string }>;
+  downloadFullInstaller: (version: string) => Promise<{ success: boolean; installerPath: string; extractedPath?: string }>;
   createInstallMedia: (installerPath: string, volumePath: string) => Promise<{ success: boolean }>;
   generateSMBIOS: (model?: string) => Promise<SMBIOSData>;
   readConfig: (path: string) => Promise<any>;

@@ -362,7 +362,25 @@ ipcMain.handle('inject-config', async (_, { cpuType, smbios, macosVersion, diskP
   const ocPath = path.join(mountPoint, 'EFI', 'OC');
 
   if (!fs.existsSync(ocPath)) {
-    throw new Error(`OpenCore directory not found at ${ocPath}. Is EFI structure correct?`);
+    console.error(`[Config] ERROR: OC not found at ${ocPath}`);
+    console.error(`[Config] Debugging EFI structure at ${mountPoint}:`);
+    try {
+      const rootFiles = fs.readdirSync(mountPoint);
+      console.error(`[Config] /Volumes/EFI root:`, rootFiles);
+
+      const efiPath = path.join(mountPoint, 'EFI');
+      if (fs.existsSync(efiPath)) {
+        console.error(`[Config] /Volumes/EFI/EFI:`, fs.readdirSync(efiPath));
+        const innerOcPath = path.join(efiPath, 'OC');
+        if (fs.existsSync(innerOcPath)) {
+          console.error(`[Config] /Volumes/EFI/EFI/OC:`, fs.readdirSync(innerOcPath));
+        }
+      }
+    } catch (e) {
+      console.error(`[Config] Failed to list files: ${e.message}`);
+    }
+
+    throw new Error(`OpenCore directory not found at ${ocPath}. Is EFI structure correct? Check debug logs.`);
   }
 
   const sourceConfig = path.join(ocPath, `config-${cpuType}.plist`);
@@ -758,7 +776,25 @@ const fetchRecoveryUrlWithCookie = async (boardId, retries = 3) => {
 };
 
 
+// Services
+// Services
+const downloadService = require('./services/downloadService');
+const recoveryService = require('./services/recoveryService');
+const gibMacOSService = require('./services/gibMacOSService');
 
+// ... existing code ...
+
+// GibMacOS Handlers
+ipcMain.handle('get-catalog', async (_, type) => {
+  try {
+    const catalog = await gibMacOSService.fetchCatalog(type || 'publicseed'); // Seed catalog often has more full installers
+    const products = await gibMacOSService.getAvailableInstallers(catalog);
+    return products;
+  } catch (e) {
+    console.error('Failed to get catalog:', e);
+    throw e;
+  }
+});
 ipcMain.handle('download-recovery', async (event, version, targetVolumePath) => {
   const path = require('path');
   const fs = require('fs');
@@ -871,48 +907,7 @@ ipcMain.handle('download-recovery', async (event, version, targetVolumePath) => 
 // Downloads InstallAssistant.pkg (~13GB) from Apple's software catalog
 // This is the same method used by gibMacOS
 
-const CATALOG_URL = 'https://swscan.apple.com/content/catalogs/others/index-15-14-13-12-10.16-10.15-10.14-10.13-10.12-10.11-10.10-10.9-mountainlion-lion-snowleopard-leopard.merged-1.sucatalog';
-
-// Parse Apple's catalog plist and find InstallAssistant.pkg URLs
-async function parseCatalogForInstallers(catalogText) {
-  // Look for products with InstallAssistantPackageIdentifiers
-  const installers = [];
-
-  // Find Sonoma installer (com.apple.pkg.InstallAssistant.macOSSonoma)
-  const sonomaMatch = catalogText.match(
-    /https:\/\/swcdn\.apple\.com\/content\/downloads\/[^\s<]+InstallAssistant\.pkg[^<]*(?=[\s\S]*?com\.apple\.pkg\.InstallAssistant\.macOSSonoma)/g
-  );
-
-  // Find Sequoia installer (com.apple.pkg.InstallAssistant.macOSSequoia)
-  const sequoiaMatch = catalogText.match(
-    /https:\/\/swcdn\.apple\.com\/content\/downloads\/[^\s<]+InstallAssistant\.pkg[^<]*(?=[\s\S]*?com\.apple\.pkg\.InstallAssistant\.macOSSequoia)/g
-  );
-
-  // Parse using reverse lookup - find the SharedSupport identifier and work backwards
-  const findInstallerUrl = (text, osName) => {
-    const pattern = new RegExp(
-      `<string>(https://swcdn\\.apple\\.com/content/downloads/[^<]+/InstallAssistant\\.pkg)</string>[\\s\\S]{0,5000}?<string>com\\.apple\\.pkg\\.InstallAssistant\\.${osName}</string>`,
-      'g'
-    );
-    const matches = [...text.matchAll(pattern)];
-    return matches.length > 0 ? matches[matches.length - 1][1] : null;
-  };
-
-  const sonomaUrl = findInstallerUrl(catalogText, 'macOSSonoma');
-  const sequoiaUrl = findInstallerUrl(catalogText, 'macOSSequoia');
-
-  if (sonomaUrl) {
-    installers.push({ version: 'sonoma', name: 'macOS Sonoma', url: sonomaUrl });
-  }
-  if (sequoiaUrl) {
-    installers.push({ version: 'sequoia', name: 'macOS Sequoia', url: sequoiaUrl });
-  }
-
-  console.log('[FullInstaller] Found installers:', installers.map(i => i.name));
-  return installers;
-}
-
-// Download full installer handler
+// Download full installer handler using gibMacOS Service
 ipcMain.handle('download-full-installer', async (event, macosVersion) => {
   const path = require('path');
   const fs = require('fs');
@@ -922,50 +917,84 @@ ipcMain.handle('download-full-installer', async (event, macosVersion) => {
 
   console.log(`[FullInstaller] Starting download for ${macosVersion}...`);
 
-  // Cache directory
-  const cacheDir = path.join(os.homedir(), 'Downloads', 'SurfaceMac_Installer', macosVersion);
-  if (!fs.existsSync(cacheDir)) {
-    fs.mkdirSync(cacheDir, { recursive: true });
-  }
-
-  const installerPath = path.join(cacheDir, 'InstallAssistant.pkg');
-
-  // Check cache
-  if (fs.existsSync(installerPath)) {
-    const size = fs.statSync(installerPath).size;
-    // Full installer should be > 10GB
-    if (size > 10 * 1024 * 1024 * 1024) {
-      console.log(`[FullInstaller] Found valid cache (${(size / 1024 / 1024 / 1024).toFixed(1)} GB). Skipping download.`);
-      onProgress({ percent: 100, downloaded: size, total: size });
-      return { success: true, installerPath };
-    }
-    console.log(`[FullInstaller] Cached file too small (${(size / 1024 / 1024).toFixed(0)} MB). Re-downloading...`);
-    fs.unlinkSync(installerPath);
-  }
-
   try {
-    // 1. Fetch catalog
-    console.log('[FullInstaller] Fetching Apple software catalog...');
-    const catalogText = await fetchText(CATALOG_URL);
-    console.log(`[FullInstaller] Catalog size: ${(catalogText.length / 1024).toFixed(0)} KB`);
+    // 1. Fetch Catalog via Service
+    console.log('[FullInstaller] Fetching Apple software catalog (gibMacOS)...');
+    const catalog = await gibMacOSService.fetchCatalog('publicseed'); // Use seed for best availability
+    const products = await gibMacOSService.getAvailableInstallers(catalog);
 
-    // 2. Parse for installer URL
-    const installers = await parseCatalogForInstallers(catalogText);
-    const installer = installers.find(i => i.version === macosVersion);
+    // 2. Find best match
+    // Map 'sonoma' -> 14.x, 'sequoia' -> 15.x
+    const targetMajor = macosVersion === 'sequoia' ? 15 : 14;
+
+    // Find latest build matching target major version
+    const installer = products.find(p => p.type === 'installassistant' &&
+      (p.version.startsWith(`${targetMajor}.`) || p.title.toLowerCase().includes(macosVersion)));
 
     if (!installer) {
-      throw new Error(`No installer found for ${macosVersion}. Available: ${installers.map(i => i.version).join(', ')}`);
+      throw new Error(`No Full Installer found for ${macosVersion} (Target: ${targetMajor}.x). Available: ${products.map(p => p.version).slice(0, 5).join(', ')}...`);
     }
 
-    console.log(`[FullInstaller] Downloading from: ${installer.url}`);
+    console.log(`[FullInstaller] Selected: ${installer.title} (${installer.version}) - ${installer.id}`);
 
-    // 3. Download InstallAssistant.pkg
-    await downloadUrlNet(installer.url, installerPath, onProgress, {
-      'User-Agent': 'SurfaceMac-Wizard/1.0'
-    });
+    // InstallAssistant.pkg is usually the first package or specifically named
+    const pkgUrl = installer.packages[0].url; // Usually only 1 package for InstallAssistant products in gibMacOS filter
 
-    console.log('[FullInstaller] Download complete!');
-    return { success: true, installerPath };
+    // Cache directory
+    const cacheDir = path.join(os.homedir(), 'Downloads', 'SurfaceMac_Installer', macosVersion);
+    if (!fs.existsSync(cacheDir)) {
+      fs.mkdirSync(cacheDir, { recursive: true });
+    }
+
+    const installerPath = path.join(cacheDir, 'InstallAssistant.pkg');
+
+    // 3. Download
+    // Check if exists
+    if (fs.existsSync(installerPath)) {
+      const size = fs.statSync(installerPath).size;
+      if (size > 10 * 1024 * 1024 * 1024) { // >10GB
+        console.log(`[FullInstaller] Using valid cache: ${installerPath}`);
+        onProgress({ percent: 100, downloaded: size, total: size });
+      } else {
+        console.log('[FullInstaller] Cache too small, re-downloading...');
+        fs.unlinkSync(installerPath);
+        await downloadService.download({
+          id: 'full-installer',
+          url: pkgUrl,
+          destPath: installerPath,
+          onProgress
+        });
+      }
+    } else {
+      await downloadService.download({
+        id: 'full-installer',
+        url: pkgUrl,
+        destPath: installerPath,
+        onProgress
+      });
+    }
+
+    // 4. Extract (requested by user for Windows usage)
+    console.log('[FullInstaller] Extracting PKG to find .app...');
+    onProgress({ percent: 100, downloaded: 0, total: 0, status: 'Extracting...' }); // Update UI status if possible
+
+    const extractDir = path.join(cacheDir, 'Extracted');
+    try {
+      await downloadService.extractPkg(installerPath, extractDir);
+      console.log(`[FullInstaller] Extracted to: ${extractDir}`);
+
+      // Find the .app path
+      // On macOS extraction yields the files directly or in a Payload folder?
+      // pkgutil --expand-full structure:
+      // ext/Install macOS Sonoma.app/...
+      // On Windows 7z structure:
+      // ext/Payload/Payload~ (cpio)/...
+
+      return { success: true, installerPath, extractedPath: extractDir };
+    } catch (e) {
+      console.warn(`[FullInstaller] Extraction warning: ${e.message}. Returning PKG path only.`);
+      return { success: true, installerPath };
+    }
 
   } catch (err) {
     console.error(`[FullInstaller] Error: ${err.message}`);
@@ -986,69 +1015,169 @@ ipcMain.handle('create-install-media', async (event, installerPkgPath, usbPath) 
   const onStatus = (msg) => event.sender.send('format-status', msg);
 
   console.log(`[CreateInstallMedia] Starting USB creation...`);
-  console.log(`[CreateInstallMedia] USB: ${usbPath}`);
+  console.log(`[CreateInstallMedia] Proposed Installer: ${installerPkgPath}`);
+  console.log(`[CreateInstallMedia] USB Target: ${usbPath}`);
+  console.log(`[CreateInstallMedia] Path '${installerPkgPath}' exists? ${fs.existsSync(installerPkgPath)}`);
 
   try {
-    // Step 1: Find Install macOS app in /Applications
-    // Check if already installed (from App Store or previous pkg install)
-    onStatus('Looking for macOS installer in /Applications...');
-    const appsDir = '/Applications';
+    let installApp = null;
 
-    const appFiles = fs.readdirSync(appsDir)
-      .filter(f => f.startsWith('Install macOS') && f.endsWith('.app'))
-      .filter(f => {
-        // Verify it has createinstallmedia
-        const createPath = path.join(appsDir, f, 'Contents', 'Resources', 'createinstallmedia');
-        return fs.existsSync(createPath);
-      })
-      .map(f => ({ name: f, mtime: fs.statSync(path.join(appsDir, f)).mtime }))
-      .sort((a, b) => b.mtime - a.mtime);
+    // Step 1: Check provided path first (from download service)
+    if (installerPkgPath && fs.existsSync(installerPkgPath)) {
+      console.log(`[CreateInstallMedia] Checking provided path: ${installerPkgPath}`);
+      // Check if it IS the .app or contains it
+      if (installerPkgPath.endsWith('.app')) {
+        installApp = installerPkgPath;
+      } else if (fs.statSync(installerPkgPath).isDirectory()) {
+        // Search inside
+        const contents = fs.readdirSync(installerPkgPath);
+        console.log(`[CreateInstallMedia] Directory contents: ${contents.join(', ')}`);
 
-    let installApp;
+        const subs = contents.filter(f => f.endsWith('.app') && f.startsWith('Install macOS'));
+        if (subs.length > 0) {
+          installApp = path.join(installerPkgPath, subs[0]);
+        } else {
+          // Deep search? maybe it's in Applications subdir?
+          // Check 'Applications' or 'Payload/Applications'
+          let foundAppDir = null;
 
-    if (appFiles.length > 0) {
-      // Found existing installer app
-      installApp = path.join(appsDir, appFiles[0].name);
-      console.log(`[CreateInstallMedia] Found existing installer: ${installApp}`);
-      onStatus(`Using existing: ${appFiles[0].name}`);
+          if (contents.includes('Applications')) {
+            foundAppDir = path.join(installerPkgPath, 'Applications');
+          } else if (contents.includes('Payload')) {
+            const payloadDir = path.join(installerPkgPath, 'Payload');
+            if (fs.existsSync(path.join(payloadDir, 'Applications'))) {
+              foundAppDir = path.join(payloadDir, 'Applications');
+            }
+          }
+
+          if (foundAppDir) {
+            const deepSubs = fs.readdirSync(foundAppDir).filter(f => f.endsWith('.app') && f.startsWith('Install macOS'));
+            if (deepSubs.length > 0) {
+              installApp = path.join(foundAppDir, deepSubs[0]);
+              console.log(`[CreateInstallMedia] Found in subdirectory: ${installApp}`);
+            }
+          }
+        }
+      }
+    }
+
+    if (installApp) {
+      console.log(`[CreateInstallMedia] Using provided installer: ${installApp}`);
+      onStatus(`Using local installer: ${path.basename(installApp)}`);
     } else {
-      // No installer found - guide user to install it manually
-      console.log('[CreateInstallMedia] No Install macOS app found in /Applications');
-      throw new Error(
-        'No "Install macOS" app found in /Applications.\n\n' +
-        'Please install the macOS installer first:\n' +
-        '1. Open the downloaded InstallAssistant.pkg manually\n' +
-        '2. Follow the installation prompts\n' +
-        '3. Then try again\n\n' +
-        'Or download from the App Store: "Install macOS Sonoma" or "Install macOS Sequoia"'
-      );
+      // Step 2: Fallback to /Applications
+      onStatus('Looking for macOS installer in /Applications...');
+      const appsDir = '/Applications';
+
+      const appFiles = fs.readdirSync(appsDir)
+        .filter(f => f.startsWith('Install macOS') && f.endsWith('.app'))
+        .filter(f => {
+          const createPath = path.join(appsDir, f, 'Contents', 'Resources', 'createinstallmedia');
+          return fs.existsSync(createPath);
+        })
+        .map(f => ({ name: f, mtime: fs.statSync(path.join(appsDir, f)).mtime }))
+        .sort((a, b) => b.mtime - a.mtime);
+
+      if (appFiles.length > 0) {
+        installApp = path.join(appsDir, appFiles[0].name);
+        console.log(`[CreateInstallMedia] Found /Applications installer: ${installApp}`);
+        onStatus(`Using existing: ${appFiles[0].name}`);
+      } else {
+        // If we just downloaded it, maybe it is in Downloads?
+        // But usually logic flow should have passed it.
+        console.log('[CreateInstallMedia] No Install macOS app found');
+        throw new Error(
+          'No "Install macOS" app found. Download it first.'
+        );
+      }
     }
 
-    console.log(`[CreateInstallMedia] Using installer: ${installApp}`);
+    // Detect if we should use Hybrid Mode (Extracted App) or Standard Mode (Official App)
+    const isStandardApp = installApp.startsWith('/Applications');
 
-    // Step 2: Verify createinstallmedia exists
-    const createInstallMediaPath = path.join(installApp, 'Contents', 'Resources', 'createinstallmedia');
-    if (!fs.existsSync(createInstallMediaPath)) {
-      throw new Error(`createinstallmedia not found at ${createInstallMediaPath}`);
-    }
+    // Check if we are forced to use file-copy (e.g. on Windows or if Standard failed previously)
+    if (!isStandardApp) {
+      console.log('[CreateInstallMedia] Detected Extracted App. Using Hybrid (Windows-Compatible) Method.');
+      onStatus('Refusing Apple tool. Using Hybrid Method (Recovery + Full Installer)...');
 
-    // Step 3: Run via external Terminal.app
-    // This is necessary because createinstallmedia has strict permission requirements (Full Disk Access)
-    // that are often denied to Electron subprocesses even with sudo.
-    onStatus('Launching Terminal for USB creation...');
-    console.log('[CreateInstallMedia] Launching external Terminal...');
+      // 1. Determine Version
+      const version = installApp.toLowerCase().includes('sequoia') ? 'sequoia' : 'sonoma';
 
-    const volumePath = usbPath.startsWith('/Volumes/') ? usbPath : `/Volumes/${usbPath}`;
-    const tempDir = require('os').tmpdir();
-    const commandPath = path.join(tempDir, 'surfacemac_usb.command');
-    const resultPath = path.join(tempDir, 'surfacemac_usb_result');
+      // 2. Download Recovery (BaseSystem)
+      const recoveryCacheDir = path.join(require('os').homedir(), 'Downloads', 'SurfaceMac_Recovery', version);
 
-    // Cleanup previous result
-    if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
+      onStatus(`Downloading Recovery Image for ${version}...`);
 
-    // Create a robust shell script that runs in Terminal
-    // We use 'sudo' inside the script so Terminal prompts for password natively
-    const scriptContent = `#!/bin/bash
+      // We need recoveryService here. Ensure it is imported or require it.
+      // Assuming recoveryService is available in scope (declared at top).
+
+      const recoveryFiles = await recoveryService.downloadRecovery({
+        macosVersion: version,
+        outputDir: recoveryCacheDir,
+        onProgress: (p) => event.sender.send('download-progress', { ...p, id: 'recovery-hybrid' })
+      });
+
+      // 3. Prepare USB Structure
+      // Ensure volume is mounted
+      const targetVolume = usbPath.startsWith('/Volumes/') ? usbPath : `/Volumes/${usbPath}`;
+      if (!fs.existsSync(targetVolume)) throw new Error(`Target volume not found at ${targetVolume}`);
+
+      const bootDir = path.join(targetVolume, 'com.apple.recovery.boot');
+      if (!fs.existsSync(bootDir)) fs.mkdirSync(bootDir, { recursive: true });
+
+      // 4. Copy Recovery Files
+      onStatus('Copying Recovery files to USB...');
+      console.log(`[CreateInstallMedia] Copying BaseSystem to ${bootDir}`);
+      fs.copyFileSync(recoveryFiles.baseSystemPath, path.join(bootDir, 'BaseSystem.dmg'));
+      fs.copyFileSync(recoveryFiles.chunklistPath, path.join(bootDir, 'BaseSystem.chunklist'));
+
+      // 5. Copy Full Installer App
+      onStatus('Copying Full Installer to USB (this may take a while)...');
+      console.log(`[CreateInstallMedia] Copying ${installApp} to ${targetVolume}`);
+
+      const destAppPath = path.join(targetVolume, path.basename(installApp));
+
+      // Using cp -R for speed and recursion (Mac/Linux)
+      if (process.platform === 'darwin') {
+        await execAsync(`cp -R "${installApp}" "${targetVolume}/"`);
+      } else {
+        // Fallback
+        // Node 16.7.0+ has fs.cp
+        if (fs.cp) {
+          await fs.promises.cp(installApp, destAppPath, { recursive: true });
+        } else {
+          throw new Error('fs.cp not supported on this Node version');
+        }
+      }
+
+      // 6. Success!
+      console.log('[CreateInstallMedia] Hybrid creation complete.');
+      return { success: true };
+
+    } else {
+      // STANDARD METHOD (Legacy / Official)
+      // Verify createinstallmedia exists
+      const createInstallMediaPath = path.join(installApp, 'Contents', 'Resources', 'createinstallmedia');
+      if (!fs.existsSync(createInstallMediaPath)) {
+        if (process.platform !== 'darwin') {
+          throw new Error('Running createinstallmedia requires macOS. On Windows, please use the provided .app files manually.');
+        }
+        throw new Error(`createinstallmedia not found at ${createInstallMediaPath}. Image might be corrupted.`);
+      }
+
+      // Step 3: Run via external Terminal.app
+      onStatus('Launching Terminal for USB creation...');
+      console.log('[CreateInstallMedia] Launching external Terminal...');
+
+      const volumePath = usbPath.startsWith('/Volumes/') ? usbPath : `/Volumes/${usbPath}`;
+      const tempDir = require('os').tmpdir();
+      const commandPath = path.join(tempDir, 'surfacemac_usb.command');
+      const resultPath = path.join(tempDir, 'surfacemac_usb_result');
+
+      // Cleanup previous result
+      if (fs.existsSync(resultPath)) fs.unlinkSync(resultPath);
+
+      const scriptContent = `#!/bin/bash
 clear
 echo "=========================================="
 echo "SurfaceMac USB Installer Creator"
@@ -1078,50 +1207,42 @@ read -p "Press [Enter] to exit..."
 exit $EXIT_CODE
 `;
 
-    fs.writeFileSync(commandPath, scriptContent, { mode: 0o755 });
+      fs.writeFileSync(commandPath, scriptContent, { mode: 0o755 });
 
-    // Open the .command file - this launches Terminal.app
-    await execAsync(`open "${commandPath}"`);
+      // Open the .command file - this launches Terminal.app
+      await execAsync(`open "${commandPath}"`);
 
-    onStatus('Please follow instructions in the opened Terminal window...');
+      onStatus('Please follow instructions in the opened Terminal window...');
 
-    // Poll for result file
-    return new Promise((resolve, reject) => {
-      const checkInterval = setInterval(() => {
-        if (fs.existsSync(resultPath)) {
-          clearInterval(checkInterval);
-          const exitCode = parseInt(fs.readFileSync(resultPath, 'utf8').trim());
-          // Cleanup
-          try { fs.unlinkSync(commandPath); } catch (e) { }
-          try { fs.unlinkSync(resultPath); } catch (e) { }
+      // Poll for result file
+      return new Promise((resolve, reject) => {
+        const checkInterval = setInterval(() => {
+          if (fs.existsSync(resultPath)) {
+            clearInterval(checkInterval);
+            const exitCode = parseInt(fs.readFileSync(resultPath, 'utf8').trim());
+            // Cleanup
+            try { fs.unlinkSync(commandPath); } catch (e) { }
+            try { fs.unlinkSync(resultPath); } catch (e) { }
 
-          if (exitCode === 0) {
-            resolve({ success: true }); // Resolve with success object
-          } else {
-            reject(new Error(`Terminal script failed with exit code ${exitCode}. Check Terminal window for details.`));
+            if (exitCode === 0) {
+              resolve({ success: true }); // Resolve with success object
+            } else {
+              reject(new Error(`Terminal script failed with exit code ${exitCode}. Check Terminal window for details.`));
+            }
           }
-        }
-      }, 1000);
+        }, 1000);
 
-      // Timeout after 45 minutes
-      setTimeout(() => {
-        clearInterval(checkInterval);
-        reject(new Error('Timed out waiting for Terminal script to complete'));
-      }, 45 * 60 * 1000);
-    });
+        // Timeout after 45 minutes
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          reject(new Error('Timed out waiting for Terminal script to complete'));
+        }, 45 * 60 * 1000);
+      });
+    }
 
   } catch (err) {
     console.error(`[CreateInstallMedia] Error: ${err.message}`);
     throw err;
-  } finally {
-    // Cleanup temp files
-    try {
-      if (fs.existsSync(extractDir)) {
-        fs.rmSync(extractDir, { recursive: true, force: true });
-      }
-    } catch (e) {
-      console.warn('[CreateInstallMedia] Cleanup warning:', e.message);
-    }
   }
 });
 

@@ -155,7 +155,8 @@ const UsbStep: React.FC = () => {
               // But createInstallMedia command takes volume path to *mount point*
               // We pass the volume path returned by format, or fallback to standard logic
               // Since createInstallMedia erases again, it doesn't matter much unless access path changes.
-              await window.electronAPI.createInstallMedia(result.installerPath, formatResult.volumePath || `/Volumes/Install macOS`);
+              // Use extracted path if available (from gibMacOS service) so we don't need /Applications
+              await window.electronAPI.createInstallMedia(result.extractedPath || result.installerPath, formatResult.volumePath || `/Volumes/Install macOS`);
             } else {
               // Recovery path: just download BaseSystem.dmg
               // Pass the volume path from format (e.g. /Volumes/INSTALL) so we copy there
@@ -396,7 +397,7 @@ const UsbStep: React.FC = () => {
           </div>
         )}
 
-        {isProcessing && (
+        {(isProcessing || formatComplete) && (
           <div style={{ marginTop: 'var(--space-xl)' }} ref={progressBarRef}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--space-sm)' }}>
               <span>{processStep}</span>
@@ -411,6 +412,18 @@ const UsbStep: React.FC = () => {
                </div>
             )}
           </div>
+        )}
+
+        {formatComplete && (
+            <div className="alert alert-success" style={{ marginTop: 'var(--space-lg)' }}>
+                <div className="alert-icon">✅</div>
+                <div className="alert-content">
+                    <div className="alert-title">USB Prepared Successfully!</div>
+                    <div className="alert-message">
+                        Your USB drive is ready. Please click <strong>Next</strong> to configure the EFI serial numbers.
+                    </div>
+                </div>
+            </div>
         )}
 
         {error && (
