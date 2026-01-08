@@ -3,29 +3,21 @@ import { useWizard } from '../App';
 const WelcomeStep: React.FC = () => {
   const { nextStep, macosVersion, setMacosVersion, cpuType, setCpuType, cpuDetected, platform, config, updateConfig } = useWizard();
 
+
   return (
     <>
-      <header className="content-header">
+      <header className="content-header" style={{ paddingBottom: 'var(--space-md)' }}>
         <h1 className="content-title">Welcome to SurfaceMac</h1>
         <p className="content-subtitle">
           Install macOS on your Microsoft Surface Pro 7 with ease.
         </p>
       </header>
 
-      <div className="content-body fade-in">
-        <div className="alert alert-info">
-          <div className="alert-icon">ℹ️</div>
-          <div className="alert-content">
-            <div className="alert-title">Before You Begin</div>
-            <div className="alert-message">
-              Make sure you have a USB drive (16GB+) and backup any important data.
-              {platform === 'win32' && ' WiFi will be required during macOS installation.'}
-            </div>
-          </div>
-        </div>
+      <div className="content-body fade-in" style={{ paddingTop: 'var(--space-lg)' }}>
+
 
         {/* CPU Selection */}
-        <h2 style={{ marginBottom: 'var(--space-md)', fontSize: 'var(--font-size-lg)', marginTop: 'var(--space-xl)' }}>
+        <h2 style={{ marginBottom: 'var(--space-md)', fontSize: 'var(--font-size-lg)', marginTop: '0' }}>
           Select your Surface Pro 7 CPU
           {cpuDetected && <span style={{ color: 'var(--color-accent-green)', fontSize: 'var(--font-size-sm)', marginLeft: 'var(--space-sm)' }}>✓ Auto-detected</span>}
         </h2>
@@ -242,7 +234,11 @@ const WelcomeStep: React.FC = () => {
       </div>
 
       <footer className="content-footer">
-        <div></div>
+        <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', maxWidth: '60%', lineHeight: '1.3' }}>
+          <strong style={{ color: 'var(--color-text-primary)' }}>Before You Begin:</strong><br />
+          USB 16GB+ required. Backup your data.
+          {platform === 'win32' && ' WiFi needed.'}
+        </div>
         <button className="btn btn-primary" onClick={nextStep}>
           Get Started →
         </button>

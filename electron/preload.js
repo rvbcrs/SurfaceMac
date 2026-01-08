@@ -33,6 +33,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     extractBaseSystemFromPkg: (pkgPath) => ipcRenderer.invoke('extract-basesystem-from-pkg', pkgPath),
     copyRecoveryToUsb: (options) => ipcRenderer.invoke('copy-recovery-to-usb', options),
 
+    // Windows Hybrid Extensions
+    extractAppFromPkg: (pkgPath) => ipcRenderer.invoke('extract-app-from-pkg', pkgPath),
+    copyAppToUsb: (options) => ipcRenderer.invoke('copy-app-to-usb', options),
+
     // Config Operations
     injectConfig: (details) => ipcRenderer.invoke('inject-config', details),
     readConfig: (path) => ipcRenderer.invoke('read-config', path),

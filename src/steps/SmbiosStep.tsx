@@ -58,19 +58,10 @@ const SmbiosStep: React.FC = () => {
       </header>
 
       <div className="content-body fade-in">
-        <div className="alert alert-info">
-          <div className="alert-icon">🔐</div>
-          <div className="alert-content">
-            <div className="alert-title">Why is this needed?</div>
-            <div className="alert-message">
-              macOS requires valid serial numbers for iCloud, iMessage, and FaceTime. 
-              We generate unique values that won't conflict with real Apple devices.
-            </div>
-          </div>
-        </div>
+
 
         {!smbios && !isGenerating && (
-          <div style={{ textAlign: 'center', padding: 'var(--space-2xl)' }}>
+          <div style={{ textAlign: 'center', padding: 'var(--space-md) var(--space-2xl)' }}>
             <div style={{ fontSize: '64px', marginBottom: 'var(--space-lg)' }}>🔑</div>
             <p style={{ color: 'var(--color-text-muted)', marginBottom: 'var(--space-xl)' }}>
               Click the button below to generate your unique SMBIOS data.
@@ -130,6 +121,17 @@ const SmbiosStep: React.FC = () => {
             </div>
           </div>
         )}
+
+        <div className="alert alert-info" style={{ marginTop: 'var(--space-2xl)', opacity: 0.8 }}>
+          <div className="alert-icon">🔐</div>
+          <div className="alert-content">
+            <div className="alert-title">Why is this needed?</div>
+            <div className="alert-message">
+              macOS requires valid serial numbers for iCloud, iMessage, and FaceTime. 
+              We generate unique values that won't conflict with real Apple devices.
+            </div>
+          </div>
+        </div>
       </div>
 
       <footer className="content-footer">

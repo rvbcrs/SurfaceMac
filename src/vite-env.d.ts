@@ -8,13 +8,15 @@ interface ElectronAPI {
   checkFullDiskAccess: () => Promise<{ hasAccess: boolean }>;
   openFullDiskSettings: () => Promise<{ success: boolean }>;
   listUSBDrives: () => Promise<USBDrive[]>;
-  formatUSB: (drivePath: string, format: string) => Promise<{ success: boolean; volumeName: string; volumePath: string }>;
+  formatUSB: (disk: string, format: string) => Promise<{ success: boolean; volumeName: string; volumePath: string; bootVolumePath?: string }>;
   downloadFile: (url: string, dest: string) => Promise<void>;
   onDownloadProgress: (callback: (progress: any) => void) => void;
   downloadRecovery: (version: string, targetPath?: string) => Promise<{ success: boolean }>;
   downloadFullInstaller: (version: string) => Promise<{ success: boolean; installerPath: string; extractedPath?: string }>;
-  extractBaseSystemFromPkg: (pkgPath: string) => Promise<{ success: boolean; baseSystemPath: string; baseChunklistPath: string | null; baseSystemSize: number }>;
-  copyRecoveryToUsb: (options: { baseSystemPath: string; baseChunklistPath: string | null; usbVolumePath: string }) => Promise<{ success: boolean; recoveryDir: string }>;
+  extractBaseSystemFromPkg: (pkgPath: string) => Promise<{ success: boolean; baseSystemPath: string; baseChunklistPath: string | null; baseSystemSize: number; sharedSupportPathKey?: string | null }>;
+  copyRecoveryToUsb: (options: { baseSystemPath: string; baseChunklistPath: string | null; usbVolumePath: string; efiVolumePath?: string }) => Promise<{ success: boolean; recoveryDir: string }>;
+  extractAppFromPkg: (pkgPath: string) => Promise<{ success: boolean; appPath: string }>;
+  copyAppToUsb: (options: { appPath: string; usbVolumePath: string; sharedSupportSource?: string }) => Promise<{ success: boolean }>;
   createInstallMedia: (installerPath: string, volumePath: string) => Promise<{ success: boolean }>;
   generateSMBIOS: (model?: string) => Promise<SMBIOSData>;
   copyEFI: (source: string, dest: string) => Promise<{ success: boolean }>;

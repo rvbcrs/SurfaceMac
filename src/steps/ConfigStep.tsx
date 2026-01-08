@@ -94,16 +94,7 @@ const ConfigStep: React.FC = () => {
       <div className="content-body fade-in">
         {!configComplete && (
           <>
-            <div className="alert alert-info" style={{ marginBottom: 'var(--space-lg)' }}>
-              <div className="alert-icon">📋</div>
-              <div className="alert-content">
-                <div className="alert-title">Config File: {configFileName}</div>
-                <div className="alert-message">
-                  Using the {cpuType.toUpperCase()} configuration for your Surface Pro 7. 
-                  This will be renamed to config.plist automatically.
-                </div>
-              </div>
-            </div>
+
 
             {/* Verbose Mode Toggle */}
             <div className="card" style={{ marginBottom: 'var(--space-lg)', padding: 'var(--space-md)' }}>
@@ -170,13 +161,18 @@ const ConfigStep: React.FC = () => {
               </div>
             )}
 
-            {!isConfiguring && (
-              <div style={{ marginTop: 'var(--space-xl)', textAlign: 'center' }}>
-                <button className="btn btn-primary" onClick={applyConfiguration}>
-                  Apply Configuration
-                </button>
+
+            
+            <div className="alert alert-info" style={{ marginTop: 'var(--space-2xl)', opacity: 0.8 }}>
+              <div className="alert-icon">📋</div>
+              <div className="alert-content">
+                <div className="alert-title">Config File: {configFileName}</div>
+                <div className="alert-message">
+                  Using the {cpuType.toUpperCase()} configuration for your Surface Pro 7. 
+                  This will be renamed to config.plist automatically.
+                </div>
               </div>
-            )}
+            </div>
 
             {isConfiguring && (
               <div style={{ marginTop: 'var(--space-xl)', textAlign: 'center' }}>
@@ -233,13 +229,23 @@ const ConfigStep: React.FC = () => {
         <button className="btn btn-secondary" onClick={prevStep} disabled={isConfiguring}>
           ← Back
         </button>
-        <button 
-          className="btn btn-primary" 
-          onClick={nextStep}
-          disabled={!configComplete}
-        >
-          Next →
-        </button>
+        
+        {!configComplete ? (
+          <button 
+            className="btn btn-primary" 
+            onClick={applyConfiguration}
+            disabled={isConfiguring}
+          >
+            {isConfiguring ? 'Applying...' : 'Apply Configuration'}
+          </button>
+        ) : (
+          <button 
+            className="btn btn-primary" 
+            onClick={nextStep}
+          >
+            Next →
+          </button>
+        )}
       </footer>
     </>
   );
