@@ -11,7 +11,9 @@ interface USBDrive {
 
 
 const UsbStep: React.FC = () => {
-  const { nextStep, prevStep, platform, updateConfig, macosVersion, config } = useWizard();
+  const { nextStep, prevStep, platform, updateConfig, macosVersion, config, cpuType } = useWizard();
+  // const [showWarning, setShowWarning] = useState(true); // Removed in favor of footer
+
   const [usbDrives, setUsbDrives] = useState<USBDrive[]>([]);
   const [selectedUsb, setSelectedUsb] = useState<USBDrive | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -127,8 +129,9 @@ const UsbStep: React.FC = () => {
           setProgress(10);
 
           // Recovery uses FAT32 (Cross-platform compatible, native boot)
-          // Full Installer uses HFS+ (Required for macOS Installer App)
-          const format = installerType === 'full' ? 'Mac OS Extended (Journaled)' : 'FAT32';
+          // Full Installer uses ExFAT (Hybrid, >4GB support, works on both platforms)
+          // NOTE: Boot files (BaseSystem.dmg) go to FAT32 EFI partition, data (.app) to ExFAT
+          const format = installerType === 'full' ? 'ExFAT' : 'FAT32';
 
           const formatResult = await window.electronAPI.formatUSB(selectedUsb.path, format);
           setProgress(20);
@@ -164,8 +167,10 @@ const UsbStep: React.FC = () => {
             const result = await window.electronAPI.downloadFullInstaller(macosVersion);
             setProgress(50);
 
-            if (platform === 'darwin') {
-              // macOS: Run createinstallmedia (traditional approach)
+            // NATIVE FLOW (HFS+) vs HYBRID FLOW (ExFAT)
+            // If ExFAT is used, we MUST use the Hybrid flow because createinstallmedia only does HFS+.
+            if (platform === 'darwin' && format !== 'ExFAT') {
+              // macOS Native: Run createinstallmedia (traditional approach)
               setProcessStep('Creating bootable USB (this takes ~20 minutes)...');
               setFormatStatus('Running createinstallmedia...');
               // Full Installer always creates "Install macOS [Version]" volume
@@ -175,21 +180,56 @@ const UsbStep: React.FC = () => {
               // Use extracted path if available (from gibMacOS service) so we don't need /Applications
               await window.electronAPI.createInstallMedia(result.extractedPath || result.installerPath, formatResult.volumePath || `/Volumes/Install macOS`);
             } else {
-              // Windows: Extract BaseSystem.dmg from PKG using 7-Zip
-              setProcessStep('Extracting macOS recovery files...');
-              setFormatStatus('Scanning InstallAssistant.pkg (requires 7-Zip)...');
+              // Hybrid Mode (Windows or macOS ExFAT): Extract App + Recovery
+              setProcessStep('Extracting full macOS Installer (Hybrid Mode)...');
+              setFormatStatus(`Unpacking InstallAssistant.pkg with ${platform === 'darwin' ? 'pkgutil' : '7-Zip'}...`);
+              
+              // 1. Extract Full App (New Step - Heavy)
+              const appResult = await window.electronAPI.extractAppFromPkg(result.installerPath);
+              setProgress(65);
 
-              const extractResult = await window.electronAPI.extractBaseSystemFromPkg(result.installerPath);
+              // 2. Use Pre-Downloaded Recovery Files (Hybrid Approach)
+              // These were downloaded from Apple's Recovery servers during downloadFullInstaller
+              setProcessStep('Using pre-downloaded recovery files...');
+              
+              // Derive version from installer path or use default
+              // The installer path already contains the full path including home dir, so we can derive from that
+              const versionMatch = result.installerPath.match(/SurfaceMac_Installer[/\\\\]([^/\\\\]+)[/\\\\]/);
+              const recoveryVersion = versionMatch ? versionMatch[1] : macosVersion;
+              
+              // Get the Downloads folder path from the installer path
+              // e.g. /Users/rvbcrs/Downloads/SurfaceMac_Installer/sonoma/InstallAssistant.pkg
+              // -> /Users/rvbcrs/Downloads
+              const downloadsMatch = result.installerPath.match(/^(.+[/\\\\]Downloads)[/\\\\]/);
+              const downloadsDir = downloadsMatch ? downloadsMatch[1] : '/Users/Shared/Downloads';
+              const hybridRecoveryDir = `${downloadsDir}/SurfaceMac_Recovery_Hybrid/${recoveryVersion}`;
+              const hybridBaseSystemPath = `${hybridRecoveryDir}/BaseSystem.dmg`;
+              const hybridChunklistPath = `${hybridRecoveryDir}/BaseSystem.chunklist`;
+              
+              console.log(`[Hybrid] Using pre-downloaded recovery: ${hybridBaseSystemPath}`);
               setProgress(70);
 
-              // Copy extracted files to USB recovery folder
-              setProcessStep('Copying recovery files to USB...');
-              setFormatStatus(`Copying BaseSystem.dmg (${(extractResult.baseSystemSize / 1024 / 1024).toFixed(0)} MB)...`);
+              // 3. Use dedicated BOOT (FAT32) partition for recovery files
+              // formatResult.bootVolumePath = '/Volumes/BOOT'
+              console.log(`[Hybrid] Using BOOT partition for recovery: ${formatResult.bootVolumePath}`);
 
+              // 4. Copy Recovery to BOOT partition
+              setProcessStep('Copying recovery files to BOOT...');
+              setFormatStatus(`Copying BaseSystem.dmg to BOOT partition...`);
               await window.electronAPI.copyRecoveryToUsb({
-                baseSystemPath: extractResult.baseSystemPath,
-                baseChunklistPath: extractResult.baseChunklistPath,
-                usbVolumePath: formatResult.volumePath || 'D:\\'
+                baseSystemPath: hybridBaseSystemPath,
+                baseChunklistPath: hybridChunklistPath,
+                usbVolumePath: formatResult.bootVolumePath || 'D:\\\\', // Use specific BOOT path
+              });
+              
+              // 5. Copy Full App to INSTALL partition (ExFAT)
+              setProcessStep('Copying full macOS Installer to INSTALL...');
+              setFormatStatus('Copying ~13GB payload to INSTALL partition...');
+              await window.electronAPI.copyAppToUsb({
+                appPath: appResult.appPath,
+                usbVolumePath: formatResult.volumePath || 'D:\\', // Primary volume (INSTALL)
+                // SharedSupport.dmg is inside the app's Contents/SharedSupport/ folder (if extracted)
+                sharedSupportSource: undefined // Not needed, it's inside the app
               });
             }
           } else {
@@ -251,6 +291,20 @@ const UsbStep: React.FC = () => {
           setFormatStatus('Ready for Configuration');
         }
 
+        // Step 4: Inject & Patch Configuration (Critical Step)
+        setProcessStep('Configuring OpenCore...');
+        setFormatStatus('Patching config.plist & Cleaning up...');
+        
+        await window.electronAPI.injectConfig({
+          cpuType: cpuType,
+          smbios: config.smbios,
+          macosVersion: macosVersion, // for airportitlwm toggling
+          diskPath: selectedUsb.path,
+          verbose: true
+        });
+        
+        console.log('Config Injection complete.');
+
         setProgress(100);
       } else {
         // Browser fallback - simulate the full process
@@ -286,89 +340,83 @@ const UsbStep: React.FC = () => {
 
   return (
     <>
-      <header className="content-header">
+      <header className="content-header" style={{ paddingBottom: 'var(--space-md)' }}>
         <h1 className="content-title">USB Preparation</h1>
         <p className="content-subtitle">
           Select your USB drive. We'll format it and create the macOS Recovery installer.
         </p>
       </header>
 
-      <div className="content-body fade-in">
-        <div className="alert alert-warning">
-          <div className="alert-icon">⚠️</div>
-          <div className="alert-content">
-            <div className="alert-title">Warning: Data Loss</div>
-            <div className="alert-message">
-              Formatting will erase ALL data on the selected USB drive.
-              Make sure you have backed up any important files.
-            </div>
-          </div>
-        </div>
+      <div className="content-body fade-in" style={{ paddingTop: 'var(--space-lg)' }}>
+
 
         {/* Installer Type Selection */}
+        {/* Installer Type Selection */}
         <div className="card" style={{ marginTop: 'var(--space-md)', background: 'rgba(30, 30, 40, 0.5)' }}>
-          <div style={{ marginBottom: 'var(--space-sm)' }}>
-            <strong>Installer Method:</strong>
-          </div>
-          <div style={{ display: 'flex', gap: 'var(--space-md)', flexWrap: 'wrap' }}>
-            <label style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              cursor: isProcessing ? 'not-allowed' : 'pointer',
-              padding: 'var(--space-sm)',
-              borderRadius: 'var(--radius-sm)',
-              background: installerType === 'recovery' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
-              border: installerType === 'recovery' ? '1px solid rgba(99, 102, 241, 0.5)' : '1px solid transparent',
-              flex: 1,
-              minWidth: '200px'
-            }}>
-              <input
-                type="radio"
-                name="installerType"
-                checked={installerType === 'recovery'}
-                onChange={() => setInstallerType('recovery')}
-                disabled={isProcessing}
-                style={{ marginRight: '10px', marginTop: '4px' }}
-              />
-              <div>
-                <div style={{ fontWeight: 600 }}>⚡ Recovery Image</div>
-                <div style={{ fontSize: 'var(--font-size-sm)', opacity: 0.8 }}>~800 MB, needs internet during install</div>
-                {macosVersion === 'sequoia' && (
-                  <div style={{ marginTop: '4px', color: 'var(--color-status-warning)', fontSize: '0.75rem' }}>
-                    ⚠️ Requires USB Ethernet (Intel WiFi not supported in Recovery for Sequoia)
-                  </div>
-                )}
-              </div>
+          <div style={{ marginBottom: 'var(--space-md)', opacity: skipFormat ? 0.5 : 1, transition: 'opacity 0.2s' }}>
+            <label className="label" style={{ fontWeight: 600, marginBottom: '8px', display: 'block' }}>
+              Installer Type
             </label>
-            <label style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              cursor: isProcessing ? 'not-allowed' : 'pointer',
-              padding: 'var(--space-sm)',
-              borderRadius: 'var(--radius-sm)',
-              background: installerType === 'full' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
-              border: installerType === 'full' ? '1px solid rgba(99, 102, 241, 0.5)' : '1px solid transparent',
-              flex: 1,
-              minWidth: '200px'
-            }}>
-              <input
-                type="radio"
-                name="installerType"
-                checked={installerType === 'full'}
-                onChange={() => setInstallerType('full')}
-                disabled={isProcessing}
-                style={{ marginRight: '10px', marginTop: '4px' }}
-              />
-              <div>
-                <div style={{ fontWeight: 600 }}>🎯 Full Installer (Recommended)</div>
-                <div style={{ fontSize: 'var(--font-size-sm)', opacity: 0.8 }}>~13 GB download, offline install</div>
-                {macosVersion === 'sequoia' && (
-                  <div style={{ marginTop: '4px', color: 'var(--color-status-success)', fontSize: '0.75rem' }}>
-                    ✓ Best for Sequoia (No WiFi needed)
-                  </div>
-                )}
-              </div>
-            </label>
+            <div style={{ display: 'flex', gap: 'var(--space-md)' }}>
+              <label style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                cursor: (isProcessing || skipFormat) ? 'not-allowed' : 'pointer',
+                padding: 'var(--space-sm)',
+                borderRadius: 'var(--radius-sm)',
+                background: installerType === 'recovery' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                border: installerType === 'recovery' ? '1px solid rgba(99, 102, 241, 0.5)' : '1px solid transparent',
+                flex: 1,
+                minWidth: '200px'
+              }}>
+                <input
+                  type="radio"
+                  name="installerType"
+                  checked={installerType === 'recovery'}
+                  onChange={() => setInstallerType('recovery')}
+                  disabled={isProcessing || skipFormat}
+                  style={{ marginRight: '10px', marginTop: '4px' }}
+                />
+                <div>
+                  <div style={{ fontWeight: 600 }}>⚡ Recovery Image</div>
+                  <div style={{ fontSize: 'var(--font-size-sm)', opacity: 0.8 }}>~800 MB, needs internet during install</div>
+                  {macosVersion === 'sequoia' && (
+                    <div style={{ marginTop: '4px', color: 'var(--color-status-warning)', fontSize: '0.75rem' }}>
+                      ⚠️ Requires USB Ethernet
+                    </div>
+                  )}
+                </div>
+              </label>
+              <label style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                cursor: (isProcessing || skipFormat) ? 'not-allowed' : 'pointer',
+                padding: 'var(--space-sm)',
+                borderRadius: 'var(--radius-sm)',
+                background: installerType === 'full' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                border: installerType === 'full' ? '1px solid rgba(99, 102, 241, 0.5)' : '1px solid transparent',
+                flex: 1,
+                minWidth: '200px'
+              }}>
+                <input
+                  type="radio"
+                  name="installerType"
+                  checked={installerType === 'full'}
+                  onChange={() => setInstallerType('full')}
+                  disabled={isProcessing || skipFormat}
+                  style={{ marginRight: '10px', marginTop: '4px' }}
+                />
+                <div>
+                  <div style={{ fontWeight: 600 }}>🎯 Full Installer (Recommended)</div>
+                  <div style={{ fontSize: 'var(--font-size-sm)', opacity: 0.8 }}>~13 GB download, offline install</div>
+                  {macosVersion === 'sequoia' && (
+                    <div style={{ marginTop: '4px', color: 'var(--color-status-success)', fontSize: '0.75rem' }}>
+                      ✓ Best for Sequoia (No WiFi needed)
+                    </div>
+                  )}
+                </div>
+              </label>
+            </div>
           </div>
         </div>
 
@@ -425,7 +473,14 @@ const UsbStep: React.FC = () => {
                 key={drive.id}
                 className={`card ${selectedUsb?.id === drive.id ? 'selected' : ''}`}
                 onClick={() => !isProcessing && setSelectedUsb(drive)}
-                style={{ cursor: isProcessing ? 'default' : 'pointer' }}
+                style={{ 
+                  cursor: isProcessing ? 'default' : 'pointer',
+                  ...(selectedUsb?.id === drive.id ? {
+                    boxShadow: '0 0 15px 3px rgba(52, 211, 153, 0.5)',
+                    border: '2px solid var(--color-success)',
+                    transform: 'scale(1.02)'
+                  } : {})
+                }}
               >
                 <div className="card-header">
                   <div className="card-icon">💾</div>
@@ -478,22 +533,29 @@ const UsbStep: React.FC = () => {
       </div>
 
       <footer className="content-footer">
-        <button className="btn btn-secondary" onClick={prevStep} disabled={isProcessing}>
-          Back
-        </button>
-        <button
-          className="btn btn-primary"
-          onClick={() => {
-            if (formatComplete) {
-              nextStep();
-            } else {
-              startProcess();
-            }
-          }}
-          disabled={(!selectedUsb && !skipFormat && !skipEfiCopy) || (isProcessing && !formatComplete)}
-        >
-          {formatComplete ? 'Next' : 'Start Process'}
-        </button>
+        <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', maxWidth: '50%', lineHeight: '1.3' }}>
+          <strong style={{ color: 'var(--color-status-warning)' }}>⚠️ Warning:</strong><br />
+          Formatting erases ALL data on USB.<br />
+          Backup files before starting.
+        </div>
+        <div style={{ display: 'flex', gap: 'var(--space-md)' }}>
+          <button className="btn btn-secondary" onClick={prevStep} disabled={isProcessing}>
+            Back
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              if (formatComplete) {
+                nextStep();
+              } else {
+                startProcess();
+              }
+            }}
+            disabled={!selectedUsb || (isProcessing && !formatComplete)}
+          >
+            {formatComplete ? 'Next' : 'Start Process'}
+          </button>
+        </div>
       </footer>
     </>
   );
