@@ -8,7 +8,7 @@ interface ElectronAPI {
   checkFullDiskAccess: () => Promise<{ hasAccess: boolean }>;
   openFullDiskSettings: () => Promise<{ success: boolean }>;
   listUSBDrives: () => Promise<USBDrive[]>;
-  formatUSB: (disk: string, format: string) => Promise<{ success: boolean; volumeName: string; volumePath: string; bootVolumePath?: string }>;
+  formatUSB: (disk: string, format: string, forceFormat?: boolean) => Promise<{ success: boolean; volumeName: string; volumePath: string; bootVolumePath?: string; skippedFormat?: boolean }>;
   downloadFile: (url: string, dest: string) => Promise<void>;
   onDownloadProgress: (callback: (progress: any) => void) => void;
   downloadRecovery: (version: string, targetPath?: string) => Promise<{ success: boolean }>;

@@ -30,6 +30,9 @@ const UsbStep: React.FC = () => {
 
   // Installer type: 'recovery' (800MB, needs internet) or 'full' (13GB, offline)
   const [installerType, setInstallerType] = useState<'recovery' | 'full'>('recovery');
+  
+  // Force format option - bypasses partition existence check
+  const [forceFormat, setForceFormat] = useState<boolean>(false);
 
   // Auto-select Full Installer for Sequoia due to WiFi limitations
   useEffect(() => {
@@ -133,7 +136,7 @@ const UsbStep: React.FC = () => {
           // NOTE: Boot files (BaseSystem.dmg) go to FAT32 EFI partition, data (.app) to ExFAT
           const format = installerType === 'full' ? 'ExFAT' : 'FAT32';
 
-          const formatResult = await window.electronAPI.formatUSB(selectedUsb.path, format);
+          const formatResult = await window.electronAPI.formatUSB(selectedUsb.path, format, forceFormat);
           setProgress(20);
 
           // Step 2: Download macOS (20-80%)
@@ -429,12 +432,29 @@ const UsbStep: React.FC = () => {
               onChange={(e) => {
                 setSkipFormat(e.target.checked);
                 if (!e.target.checked) setSkipEfiCopy(false); // Can't skip copy if we are formatting
+                if (e.target.checked) setForceFormat(false); // Can't force format if skipping
               }}
               style={{ marginRight: '10px' }}
               disabled={isProcessing}
             />
             <span>
               <strong>Update EFI Only</strong> (Skip Format & Recovery)
+            </span>
+          </label>
+
+          <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', userSelect: 'none', marginBottom: '8px', marginLeft: '24px' }}>
+            <input
+              type="checkbox"
+              checked={forceFormat}
+              onChange={(e) => {
+                setForceFormat(e.target.checked);
+                if (e.target.checked) setSkipFormat(false); // Can't skip format if forcing
+              }}
+              style={{ marginRight: '10px' }}
+              disabled={isProcessing || skipFormat}
+            />
+            <span style={{ opacity: skipFormat ? 0.5 : 1 }}>
+              <strong>Force Format</strong> (Re-format even if partitions exist)
             </span>
           </label>
 

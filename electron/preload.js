@@ -21,7 +21,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // USB Operations
     listUSBDrives: () => ipcRenderer.invoke('list-usb-drives'),
-    formatUSB: (drivePath, format) => ipcRenderer.invoke('format-usb', drivePath, format),
+    formatUSB: (drivePath, format, forceFormat) => ipcRenderer.invoke('format-usb', drivePath, format, forceFormat),
     onFormatStatus: (callback) => ipcRenderer.on('format-status', (_, message) => callback(message)),
 
     // Downloads with progress

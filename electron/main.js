@@ -193,7 +193,7 @@ ipcMain.handle('list-usb-drives', async () => {
   }
 });
 
-ipcMain.handle('format-usb', async (event, diskPath, format) => {
+ipcMain.handle('format-usb', async (event, diskPath, format, forceFormat = false) => {
   const { exec } = require('child_process');
   const { promisify } = require('util');
   const execAsync = promisify(exec);
@@ -205,21 +205,26 @@ ipcMain.handle('format-usb', async (event, diskPath, format) => {
 
   if (process.platform === 'darwin') {
     // SKIP FORMAT CHECK: If BOOT and INSTALL partitions already exist, skip formatting
-    const bootVolumeExists = fs.existsSync('/Volumes/BOOT');
-    const installVolumeExists = fs.existsSync('/Volumes/INSTALL');
+    // UNLESS forceFormat is true
+    if (!forceFormat) {
+      const bootVolumeExists = fs.existsSync('/Volumes/BOOT');
+      const installVolumeExists = fs.existsSync('/Volumes/INSTALL');
 
-    if (bootVolumeExists && installVolumeExists) {
-      console.log('[USB] BOOT and INSTALL partitions already exist. Skipping format.');
-      setStatus('USB already formatted (BOOT + INSTALL found). Skipping...');
+      if (bootVolumeExists && installVolumeExists) {
+        console.log('[USB] BOOT and INSTALL partitions already exist. Skipping format.');
+        setStatus('USB already formatted (BOOT + INSTALL found). Skipping...');
 
-      // Return immediately with the volume paths
-      return {
-        success: true,
-        volumeName: 'INSTALL',
-        volumePath: '/Volumes/INSTALL',
-        bootVolumePath: '/Volumes/BOOT',
-        skippedFormat: true
-      };
+        // Return immediately with the volume paths
+        return {
+          success: true,
+          volumeName: 'INSTALL',
+          volumePath: '/Volumes/INSTALL',
+          bootVolumePath: '/Volumes/BOOT',
+          skippedFormat: true
+        };
+      }
+    } else {
+      console.log('[USB] Force format requested. Proceeding with format...');
     }
 
     setStatus('Unmounting disk...');
